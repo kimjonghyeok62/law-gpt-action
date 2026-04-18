@@ -93,6 +93,9 @@ paths:
                 jo:
                   type: string
                   description: 조문 번호 (예: 제3조, 3, 제3조의2)
+                includeRelated:
+                  type: boolean
+                  description: true면 관련 시행령/시행규칙을 한 번에 함께 조회
                 efYd:
                   type: string
                   description: 시행일자 (YYYYMMDD)

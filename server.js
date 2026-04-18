@@ -173,7 +173,7 @@ app.post("/law/search", async (req, res) => {
 
 app.post("/law/text", async (req, res) => {
   try {
-    const { mst, lawId, lawName, jo, efYd } = req.body;
+    const { mst, lawId, lawName, jo, efYd, includeRelated } = req.body;
 
     if (!mst && !lawId && !lawName) {
       return res.status(400).json({
@@ -205,11 +205,13 @@ app.post("/law/text", async (req, res) => {
       resolvedLawName = best?.lawName || resolvedLawName;
     }
 
+    const joParsed = parseJoAndClause(jo);
+
     const result = await getLawText(apiClient, {
       mst: resolvedMst,
       lawId: resolvedLawId,
       lawName: resolvedLawName,
-      jo: jo ? String(jo) : undefined,
+      jo: joParsed.joForLookup ? String(joParsed.joForLookup) : undefined,
       efYd: efYd ? String(efYd) : undefined,
       apiKey: LAW_OC
     });
@@ -217,17 +219,65 @@ app.post("/law/text", async (req, res) => {
 
     // Never fail request only because formatting failed; fallback to raw text.
     try {
-      const meta = extractLawTextMeta(rawText, { lawNameHint: resolvedLawName, joHint: jo });
+      const meta = extractLawTextMeta(rawText, { lawNameHint: resolvedLawName, joHint: joParsed.joForLookup || jo });
       const links = buildArticleLinks(meta.lawName, meta.joDisplay);
       const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay);
-      const formattedText = formatLawTextSimple(rawText, { lawNameHint: resolvedLawName, joHint: jo });
+      const formattedText = formatLawTextSimple(rawText, {
+        lawNameHint: resolvedLawName,
+        joHint: joParsed.joForLookup || jo,
+        clauseNo: joParsed.clauseNo
+      });
+
+      let finalText = formattedText;
+      let relatedSections = [];
+      const needRelated = includeRelated === true || includeRelated === "true" || includeRelated === 1;
+      if (needRelated && delegatedLinks.length > 0) {
+        const targets = delegatedLinks.slice(0, 2); // 시행령/시행규칙
+        relatedSections = await Promise.all(
+          targets.map(async (d) => {
+            try {
+              const rr = await getLawText(apiClient, {
+                lawName: d.lawName,
+                jo: d.jo,
+                apiKey: LAW_OC
+              });
+              const rraw = rr.content?.[0]?.text ?? "";
+              const rtxt = formatLawTextSimple(rraw, { lawNameHint: d.lawName, joHint: d.jo });
+              return {
+                kind: d.kind,
+                lawName: d.lawName,
+                jo: d.jo,
+                text: rtxt,
+                link: d.articleDirect
+              };
+            } catch {
+              return {
+                kind: d.kind,
+                lawName: d.lawName,
+                jo: d.jo,
+                text: `${d.lawName} ${d.jo || ""} 조회 중 오류가 발생했습니다.`,
+                link: d.articleDirect
+              };
+            }
+          })
+        );
+      }
+
+      if (relatedSections.length > 0) {
+        finalText += `\n\n---\n\n**관련 법령 동시 조회 결과**\n\n`;
+        finalText += relatedSections
+          .map((s) => `### ${s.kind}\n${s.text}\n\n링크: ${s.link}`)
+          .join("\n\n");
+      }
+
       res.json({
         success: !result.isError,
         asOfDate: new Date().toISOString().slice(0, 10),
-        text: formattedText,
+        text: finalText,
         links: {
           ...links,
-          delegated: delegatedLinks
+          delegated: delegatedLinks,
+          relatedFetched: relatedSections.length > 0
         }
       });
     } catch (_) {
@@ -367,6 +417,35 @@ function buildFollowupQuestion(articleBlock, delegatedLinks = []) {
   return `추천 질문: "이 조문을 민원 회신 문장으로 5줄 이내로 작성해줘."`
 }
 
+function parseJoAndClause(joInput) {
+  const raw = String(joInput || "").trim()
+  if (!raw) return { joForLookup: undefined, clauseNo: null }
+
+  const clauseMatch = raw.match(/(\d+)\s*항/)
+  const clauseNo = clauseMatch ? Number(clauseMatch[1]) : null
+  const joForLookup = raw.replace(/\s*\d+\s*항.*/, "").trim() || raw
+  return { joForLookup, clauseNo }
+}
+
+function extractClauseBlock(articleBlock, clauseNo) {
+  if (!clauseNo || clauseNo < 1) return articleBlock
+  const markers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
+  const marker = markers[clauseNo - 1]
+  if (!marker) return articleBlock
+
+  const text = String(articleBlock || "")
+  const start = text.indexOf(marker)
+  if (start < 0) return articleBlock
+
+  let end = text.length
+  for (const m of markers) {
+    if (m === marker) continue
+    const idx = text.indexOf(m, start + marker.length)
+    if (idx >= 0 && idx < end) end = idx
+  }
+  return text.slice(start, end).trim()
+}
+
 function emphasizeKeyPhrases(input) {
   let out = String(input || "")
   const patterns = [
@@ -421,7 +500,8 @@ function formatLawTextSimple(rawText, options = {}) {
   const afterHeader = text.slice(articleStart + headerMatch[0].length);
   const nextHeaderRel = afterHeader.search(/\n제\s*\d+조(?:의\s*\d+)?\s*\([^)]+\)/);
   const articleEnd = nextHeaderRel >= 0 ? articleStart + headerMatch[0].length + nextHeaderRel : text.length;
-  const articleBlock = text.slice(articleStart, articleEnd).trim();
+  const articleBlockRaw = text.slice(articleStart, articleEnd).trim();
+  const articleBlock = options?.clauseNo ? extractClauseBlock(articleBlockRaw, options.clauseNo) : articleBlockRaw;
 
   const joDisplay = (headerMatch[0].match(/제\s*\d+조(?:의\s*\d+)?/)?.[0] || meta.joDisplay || "해당 조문")
     .replace(/\s+/g, "");
@@ -433,9 +513,12 @@ function formatLawTextSimple(rawText, options = {}) {
       .replace(/\n(\d+\.\s+)/g, "\n\n$1")
       .replace(/\n(①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩)/g, "\n\n$1")
   );
-  const summary = emphasizeKeyPhrases(summarizeArticleBlock(articleBlock));
+  const summary = emphasizeKeyPhrases(summarizeArticleBlock(articleBlockRaw));
 
   let out = `${lawName} ${joDisplay} 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
+  if (options?.clauseNo) {
+    out = `${lawName} ${joDisplay} ${options.clauseNo}항 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
+  }
 
   out += `\n\n원문 링크: ${links.articleDirect}`;
 
