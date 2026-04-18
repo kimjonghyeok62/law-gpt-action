@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import { XMLParser } from "fast-xml-parser";
 import { LawApiClient } from "./korean-law-mcp/build/lib/api-client.js";
+import { parseThreeTierDelegation } from "./korean-law-mcp/build/lib/three-tier-parser.js";
 import { getLawText } from "./korean-law-mcp/build/tools/law-text.js";
 import { searchOrdinance } from "./korean-law-mcp/build/tools/ordinance-search.js";
 import { getOrdinance } from "./korean-law-mcp/build/tools/ordinance.js";
@@ -230,7 +231,12 @@ app.post("/law/text", async (req, res) => {
     try {
       const meta = extractLawTextMeta(rawText, { lawNameHint: resolvedLawName, joHint: joParsed.joForLookup || jo });
       const links = buildArticleLinks(meta.lawName, meta.joDisplay);
-      const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, true);
+      let delegatedLinks = await resolveExactDelegations(resolvedMst, resolvedLawId, meta.joDisplay);
+      if (delegatedLinks) {
+        delegatedLinks = await resolveSecondLevelDelegations(delegatedLinks);
+      } else {
+        delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, true);
+      }
       const formattedText = formatLawTextSimple(rawText, {
         lawNameHint: resolvedLawName,
         joHint: joParsed.joForLookup || jo,
@@ -390,6 +396,97 @@ function extractJoFromText(text) {
   const m = String(text || "").match(/제\s*(\d+)조(?:의\s*(\d+))?/)
   if (!m) return null
   return m[2] ? `제${Number(m[1])}조의${Number(m[2])}` : `제${Number(m[1])}조`
+}
+
+async function resolveExactDelegations(mst, lawId, joDisplay) {
+  try {
+    if (!mst && !lawId) return null;
+    const raw = await apiClient.getThreeTier({ mst, lawId, knd: "2", apiKey: LAW_OC });
+    const json = JSON.parse(raw);
+    const { meta, articles } = parseThreeTierDelegation(json);
+
+    // Normalize joDisplay for matching (e.g. "제23조" → "제23조")
+    const normalizedJo = String(joDisplay || "").replace(/\s+/g, "");
+    const article = articles.find(a => a.joNum.replace(/\s+/g, "") === normalizedJo);
+    if (!article || article.delegations.length === 0) return null;
+
+    const results = [];
+    const seen = new Set();
+
+    for (const d of article.delegations) {
+      if (!d.joNum) continue;
+      const joStr = d.joNum.replace(/\s+/g, "");
+      const key = `${d.type}|${joStr}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      // Resolve the real law name from meta
+      let lawName = d.lawName;
+      if (!lawName || lawName === meta.sihyungryungName || lawName === meta.sihyungkyuchikName) {
+        if (d.type === "시행령") lawName = meta.sihyungryungName || d.lawName;
+        else if (d.type === "시행규칙") lawName = meta.sihyungkyuchikName || d.lawName;
+      }
+
+      results.push({
+        kind: d.type,
+        lawName: lawName || d.lawName,
+        jo: joStr,
+        ...buildArticleLinks(lawName || d.lawName, joStr)
+      });
+    }
+
+    return results.length > 0 ? results : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSecondLevelDelegations(delegations) {
+  // For each 시행령 article, check if IT delegates further to 시행규칙/부령
+  // by calling 3단비교 on the 시행령's MST
+  const results = [...delegations];
+  const sihaengryung = delegations.find(d => d.kind === "시행령");
+  const alreadyHasRule = delegations.some(d => d.kind === "시행규칙");
+  if (!sihaengryung || alreadyHasRule) return results;
+
+  try {
+    // Search for 시행령 MST
+    const searchRaw = await apiClient.searchLaw(sihaengryung.lawName, LAW_OC);
+    const parsed = parseSearchLawXml(searchRaw);
+    if (!parsed.results?.length) return results;
+    const normalized = sihaengryung.lawName.replace(/\s/g, "");
+    const exact = parsed.results.find(r => String(r.lawName || "").replace(/\s/g, "") === normalized);
+    const best = exact || parsed.results[0];
+    const siMst = best?.mst ? String(best.mst) : undefined;
+    const siLawId = best?.lawId ? String(best.lawId) : undefined;
+    if (!siMst && !siLawId) return results;
+
+    const raw = await apiClient.getThreeTier({ mst: siMst, lawId: siLawId, knd: "2", apiKey: LAW_OC });
+    const json = JSON.parse(raw);
+    const { meta: siMeta, articles: siArticles } = parseThreeTierDelegation(json);
+
+    const targetJo = sihaengryung.jo.replace(/\s+/g, "");
+    const siArticle = siArticles.find(a => a.joNum.replace(/\s+/g, "") === targetJo);
+    if (!siArticle) return results;
+
+    for (const d of siArticle.delegations) {
+      if (d.type !== "시행규칙" || !d.joNum) continue;
+      const joStr = d.joNum.replace(/\s+/g, "");
+      const lawName = d.lawName || siMeta.sihyungkyuchikName;
+      if (!lawName) continue;
+      results.push({
+        kind: "시행규칙",
+        lawName,
+        jo: joStr,
+        ...buildArticleLinks(lawName, joStr)
+      });
+      break; // 첫 번째 시행규칙만
+    }
+  } catch {
+    // 2단계 실패는 무시
+  }
+
+  return results;
 }
 
 function buildDelegatedLinks(articleBlock, lawName, currentJo, includeFallback = false) {
