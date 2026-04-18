@@ -483,25 +483,6 @@ function summarizeArticleBlock(articleBlock) {
   return lines.join("\n")
 }
 
-function extractAmendmentDate(articleBlock, fullText) {
-  const src = `${String(articleBlock || "")}\n${String(fullText || "")}`
-
-  const bracket = src.match(/\[(?:전부개정|일부개정|개정)\s*([0-9]{4}[.\-]\s*[0-9]{1,2}[.\-]\s*[0-9]{1,2}\.?)\]/)
-  if (bracket?.[1]) return bracket[1].replace(/\s+/g, "")
-
-  const field = src.match(/(?:조문개정일|개정일)\s*[:：]\s*([0-9]{4}(?:[.\-]?[0-9]{2}){2})/)
-  if (field?.[1]) {
-    const d = field[1].replace(/[^0-9]/g, "")
-    if (d.length === 8) return `${d.slice(0, 4)}.${d.slice(4, 6)}.${d.slice(6, 8)}`
-    return field[1]
-  }
-
-  const sentence = src.match(/개정[^0-9]{0,10}([0-9]{4}[.\-]\s*[0-9]{1,2}[.\-]\s*[0-9]{1,2}\.?)/)
-  if (sentence?.[1]) return sentence[1].replace(/\s+/g, "")
-
-  return null
-}
-
 function formatLawTextSimple(rawText, options = {}) {
   const text = String(rawText || "").replace(/\r\n/g, "\n").trim();
   if (!text) return text;
@@ -527,7 +508,6 @@ function formatLawTextSimple(rawText, options = {}) {
 
   const links = buildArticleLinks(lawName, joDisplay);
   const delegatedLinks = buildDelegatedLinks(articleBlock, lawName, joDisplay);
-  const amendmentDate = extractAmendmentDate(articleBlockRaw, text);
   const readableArticle = emphasizeKeyPhrases(
     articleBlock
       .replace(/\n(\d+\.\s+)/g, "\n\n$1")
@@ -535,13 +515,9 @@ function formatLawTextSimple(rawText, options = {}) {
   );
   const summary = emphasizeKeyPhrases(summarizeArticleBlock(articleBlockRaw));
 
-  let out = `${lawName} ${joDisplay} 조문입니다.\n\n---\n\n`;
-  if (amendmentDate) {
-    out += `**개정일:** ${amendmentDate}\n\n`
-  }
-  out += `${readableArticle}\n\n---\n\n${summary}`;
+  let out = `${lawName} ${joDisplay} 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
   if (options?.clauseNo) {
-    out = `${lawName} ${joDisplay} ${options.clauseNo}항 조문입니다.\n\n---\n\n${amendmentDate ? `**개정일:** ${amendmentDate}\n\n` : ""}${readableArticle}\n\n---\n\n${summary}`;
+    out = `${lawName} ${joDisplay} ${options.clauseNo}항 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
   }
 
   out += `\n\n원문 링크: ${links.articleDirect}`;
