@@ -1,0 +1,258 @@
+openapi: 3.1.0
+info:
+  title: Korean Law Action Wrapper
+  version: 1.0.0
+  description: |
+    대한민국 법령 조회용 Action API입니다.
+    search는 법령/시행령/시행규칙 후보를 찾고,
+    text는 mst 또는 lawId와 조문번호(jo)로 본문을 조회합니다.
+    three-tier는 법률-시행령-시행규칙 구조 비교용입니다.
+
+servers:
+  - url: https://your-domain.com
+    description: 배포 서버
+  - url: http://localhost:3000
+    description: 로컬 개발 서버
+
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      summary: 서버 상태 확인
+      description: 서버가 살아 있는지와 법령 API 키 설정 여부를 확인합니다.
+      responses:
+        "200":
+          description: 정상 응답
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                  hasLawOc:
+                    type: boolean
+                  actionTokenRaw:
+                    type: string
+                required:
+                  - ok
+                  - message
+                  - hasLawOc
+
+  /law/search:
+    post:
+      operationId: searchLaw
+      summary: 법령명 검색
+      description: |
+        법령명을 검색하여 법률, 시행령, 시행규칙 후보를 반환합니다.
+        검색 후 mst를 확보한 다음 /law/text에서 사용하는 흐름을 권장합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  description: 예) 학원의 설립ㆍ운영 및 과외교습에 관한 법률
+              required:
+                - query
+      responses:
+        "200":
+          description: 검색 성공
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tool:
+                    type: string
+                  query:
+                    type: string
+                  target:
+                    type: string
+                  keyword:
+                    type: string
+                  count:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        lawName:
+                          type: string
+                        lawId:
+                          type: string
+                        mst:
+                          type: string
+                        promulgationDate:
+                          type: string
+                          description: YYYYMMDD
+                        effectiveDate:
+                          type: string
+                          description: YYYYMMDD
+                        lawType:
+                          type: string
+                        ministryName:
+                          type: string
+                        raw:
+                          type: object
+                      required:
+                        - lawName
+                        - mst
+                required:
+                  - success
+                  - tool
+                  - query
+                  - count
+                  - results
+
+  /law/text:
+    post:
+      operationId: getLawText
+      summary: 법령 본문 또는 특정 조문 조회
+      description: |
+        mst 또는 lawId로 법령 본문을 조회합니다.
+        jo를 함께 주면 특정 조문을 조회합니다.
+        실무상으로는 /law/search에서 mst를 얻은 뒤 mst + jo로 조회하는 방식을 권장합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mst:
+                  type: string
+                  description: search 결과의 법령일련번호
+                lawId:
+                  type: string
+                  description: search 결과의 법령ID
+                jo:
+                  type: string
+                  description: 예) 제3조
+                efYd:
+                  type: string
+                  description: 시행일자 YYYYMMDD
+              anyOf:
+                - required: [mst]
+                - required: [lawId]
+      responses:
+        "200":
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tool:
+                    type: string
+                  input:
+                    type: object
+                    properties:
+                      mst:
+                        type: string
+                      lawId:
+                        type: string
+                      jo:
+                        type: string
+                      efYd:
+                        type: string
+                  lawName:
+                    type: string
+                  lawId:
+                    type: string
+                  promulgationDate:
+                    type: string
+                  effectiveDate:
+                    type: string
+                  lawType:
+                    type: string
+                  ministryName:
+                    type: string
+                  articleNumber:
+                    type: string
+                  title:
+                    type: string
+                  body:
+                    type: string
+                  paragraphs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        number:
+                          type: string
+                        text:
+                          type: string
+                        raw:
+                          type: object
+                  raw:
+                    type: object
+                required:
+                  - success
+                  - tool
+                  - input
+
+  /law/three-tier:
+    post:
+      operationId: getThreeTier
+      summary: 법률-시행령-시행규칙 3단 비교
+      description: |
+        mst 또는 lawId를 기준으로 3단 비교 원문을 반환합니다.
+        위임조문·인용조문 확인용입니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mst:
+                  type: string
+                lawId:
+                  type: string
+                knd:
+                  type: string
+                  description: 기본값 2
+              anyOf:
+                - required: [mst]
+                - required: [lawId]
+      responses:
+        "200":
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tool:
+                    type: string
+                  input:
+                    type: object
+                    properties:
+                      mst:
+                        type: string
+                      lawId:
+                        type: string
+                      knd:
+                        type: string
+                  raw:
+                    oneOf:
+                      - type: string
+                      - type: object
+                required:
+                  - success
+                  - tool
+                  - input
+                  - raw

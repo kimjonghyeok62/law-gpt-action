@@ -1,0 +1,336 @@
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { XMLParser } from "fast-xml-parser";
+import { LawApiClient } from "./korean-law-mcp/build/lib/api-client.js";
+
+dotenv.config();
+
+const app = express();
+
+app.use(cors());
+app.use(express.json({ type: "application/json" }));
+
+const PORT = process.env.PORT || 3000;
+const ACTION_TOKEN = process.env.ACTION_TOKEN || "";
+const LAW_OC = process.env.LAW_OC || "";
+
+console.log("ACTION_TOKEN =", JSON.stringify(ACTION_TOKEN));
+console.log("LAW_OC exists =", !!LAW_OC);
+
+const apiClient = new LawApiClient({ apiKey: LAW_OC });
+
+const xmlParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "@_",
+  parseTagValue: true,
+  trimValues: true,
+  cdataPropName: "#cdata"
+});
+
+function authMiddleware(req, res, next) {
+  if (!ACTION_TOKEN) return next();
+
+  const auth = req.headers.authorization || "";
+  if (auth !== `Bearer ${ACTION_TOKEN}`) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
+
+// 테스트 끝날 때까지 잠시 끔
+// app.use(authMiddleware);
+
+function toArray(value) {
+  if (value == null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function normalizeText(value) {
+  if (value == null) return "";
+  if (typeof value === "object") {
+    if ("#cdata" in value) return String(value["#cdata"]).trim();
+    if ("content" in value) return String(value.content).trim();
+  }
+  return String(value).replace(/\r\n/g, "\n").trim();
+}
+
+function findValueByKeyIncludes(obj, includesList) {
+  if (!obj || typeof obj !== "object") return undefined;
+
+  for (const [key, value] of Object.entries(obj)) {
+    const keyStr = String(key);
+    if (includesList.some((part) => keyStr.includes(part))) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function findNestedObjectByKeyIncludes(obj, includesList) {
+  if (!obj || typeof obj !== "object") return undefined;
+
+  for (const [key, value] of Object.entries(obj)) {
+    const keyStr = String(key);
+    if (includesList.some((part) => keyStr.includes(part))) {
+      return value;
+    }
+    if (value && typeof value === "object") {
+      const nested = findNestedObjectByKeyIncludes(value, includesList);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}
+
+function parseSearchLawXml(xmlText) {
+  const parsed = xmlParser.parse(xmlText);
+  const root = parsed?.LawSearch || parsed;
+
+  const rawItems = root?.law || root?.Law || [];
+  const items = toArray(rawItems);
+
+  const results = items.map((item) => {
+    const lawName =
+      normalizeText(findValueByKeyIncludes(item, ["법령명", "법령명한글"])) ||
+      normalizeText(item.lawName);
+
+    const lawId =
+      normalizeText(findValueByKeyIncludes(item, ["법령ID"])) ||
+      normalizeText(item.ID);
+
+    const mst =
+      normalizeText(findValueByKeyIncludes(item, ["법령일련번호"])) ||
+      normalizeText(item.MST);
+
+    const promulgationDate = normalizeText(findValueByKeyIncludes(item, ["공포일자", "공포일"]));
+    const effectiveDate = normalizeText(findValueByKeyIncludes(item, ["시행일자", "시행일"]));
+    const lawType =
+      normalizeText(findValueByKeyIncludes(item, ["법령구분명", "법종구분", "법령종류"])) ||
+      normalizeText(findValueByKeyIncludes(item, ["구분"]));
+    const ministryName = normalizeText(findValueByKeyIncludes(item, ["소관부처명"]));
+
+    return {
+      lawName,
+      lawId,
+      mst,
+      promulgationDate,
+      effectiveDate,
+      lawType,
+      ministryName,
+      raw: item
+    };
+  });
+
+  return {
+    target: root?.target,
+    keyword: root?.키워드 || root?.query,
+    count: Number(root?.totalCnt || results.length || 0),
+    results
+  };
+}
+
+function extractBasicInfo(lawRoot) {
+  const basic =
+    lawRoot?.기본정보 ||
+    findNestedObjectByKeyIncludes(lawRoot, ["기본정보"]) ||
+    {};
+
+  const lawName =
+    normalizeText(findValueByKeyIncludes(basic, ["법령명_한글", "법령명한글", "법령명"])) ||
+    normalizeText(findValueByKeyIncludes(lawRoot, ["법령명_한글", "법령명한글", "법령명"]));
+
+  const lawId =
+    normalizeText(findValueByKeyIncludes(basic, ["법령ID"])) ||
+    normalizeText(findValueByKeyIncludes(lawRoot, ["법령ID"]));
+
+  const promulgationDate =
+    normalizeText(findValueByKeyIncludes(basic, ["공포일자", "공포일"])) ||
+    normalizeText(findValueByKeyIncludes(lawRoot, ["공포일자", "공포일"]));
+
+  const effectiveDate =
+    normalizeText(findValueByKeyIncludes(basic, ["시행일자", "시행일"])) ||
+    normalizeText(findValueByKeyIncludes(lawRoot, ["시행일자", "시행일"]));
+
+  let lawType = findValueByKeyIncludes(basic, ["법종구분", "법령구분"]);
+  if (lawType && typeof lawType === "object") {
+    lawType = lawType.content ?? lawType["content"] ?? lawType;
+  }
+
+  const ministry = findValueByKeyIncludes(basic, ["소관부처"]);
+  let ministryName = "";
+  if (ministry && typeof ministry === "object") {
+    ministryName = normalizeText(ministry.content ?? ministry["content"]);
+  } else {
+    ministryName = normalizeText(findValueByKeyIncludes(basic, ["소관부처명"]));
+  }
+
+  return {
+    lawName,
+    lawId,
+    promulgationDate,
+    effectiveDate,
+    lawType: normalizeText(lawType),
+    ministryName
+  };
+}
+
+function extractArticleInfo(parsed) {
+  const lawRoot = parsed?.법령 || parsed?.Law || parsed;
+
+  const articleContainer =
+    findNestedObjectByKeyIncludes(lawRoot, ["조문"]) ||
+    findNestedObjectByKeyIncludes(parsed, ["조문"]) ||
+    {};
+
+  const articleUnit =
+    articleContainer?.조문단위 ||
+    articleContainer?.조문 ||
+    articleContainer;
+
+  const articleNumber = normalizeText(
+    findValueByKeyIncludes(articleUnit, ["조문번호", "조번호"])
+  );
+
+  const title = normalizeText(
+    findValueByKeyIncludes(articleUnit, ["조문제목", "조제목", "제목"])
+  );
+
+  const body =
+    normalizeText(findValueByKeyIncludes(articleUnit, ["조문내용", "조문본문"])) ||
+    normalizeText(findValueByKeyIncludes(articleUnit, ["본문", "내용"]));
+
+  const paraRaw =
+    articleUnit?.항 ||
+    articleUnit?.항목 ||
+    findValueByKeyIncludes(articleUnit, ["항"]);
+
+  const paragraphs = toArray(paraRaw).map((p) => ({
+    number: normalizeText(findValueByKeyIncludes(p, ["항번호", "번호"])),
+    text:
+      normalizeText(findValueByKeyIncludes(p, ["항내용"])) ||
+      normalizeText(findValueByKeyIncludes(p, ["본문", "내용"])),
+    raw: p
+  }));
+
+  return {
+    articleNumber,
+    title,
+    body,
+    paragraphs
+  };
+}
+
+function parseLawTextJson(rawText) {
+  const parsed = JSON.parse(rawText);
+  const lawRoot = parsed?.법령 || parsed?.Law || parsed;
+
+  return {
+    ...extractBasicInfo(lawRoot),
+    ...extractArticleInfo(parsed),
+    raw: parsed
+  };
+}
+
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    message: "PARSED_DIRECT_IMPORT_SERVER",
+    hasLawOc: !!LAW_OC,
+    actionTokenRaw: ACTION_TOKEN
+  });
+});
+
+app.post("/law/search", async (req, res) => {
+  try {
+    const { query } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: "query가 필요합니다." });
+    }
+
+    const raw = await apiClient.searchLaw(String(query), LAW_OC);
+    const parsed = parseSearchLawXml(raw);
+
+    res.json({
+      success: true,
+      tool: "searchLaw",
+      query,
+      ...parsed
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "searchLaw 실행 중 오류",
+      detail: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/law/text", async (req, res) => {
+  try {
+    const { mst, lawId, jo, efYd } = req.body;
+
+    if (!mst && !lawId) {
+      return res.status(400).json({
+        error: "mst 또는 lawId 중 하나는 필요합니다."
+      });
+    }
+
+    const raw = await apiClient.getLawText({
+      mst: mst ? String(mst) : undefined,
+      lawId: lawId ? String(lawId) : undefined,
+      jo: jo ? String(jo) : undefined,
+      efYd: efYd ? String(efYd) : undefined,
+      apiKey: LAW_OC
+    });
+
+    const parsed = parseLawTextJson(raw);
+
+    res.json({
+      success: true,
+      tool: "getLawText",
+      input: { mst, lawId, jo, efYd },
+      ...parsed
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "getLawText 실행 중 오류",
+      detail: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/law/three-tier", async (req, res) => {
+  try {
+    const { mst, lawId, knd } = req.body;
+
+    if (!mst && !lawId) {
+      return res.status(400).json({
+        error: "mst 또는 lawId 중 하나는 필요합니다."
+      });
+    }
+
+    const raw = await apiClient.getThreeTier({
+      mst: mst ? String(mst) : undefined,
+      lawId: lawId ? String(lawId) : undefined,
+      knd: knd ? String(knd) : "2",
+      apiKey: LAW_OC
+    });
+
+    res.json({
+      success: true,
+      tool: "getThreeTier",
+      input: { mst, lawId, knd },
+      raw: typeof raw === "string" ? raw : JSON.stringify(raw, null, 2)
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "getThreeTier 실행 중 오류",
+      detail: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Server listening on http://localhost:${PORT}`);
+});
