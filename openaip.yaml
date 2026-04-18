@@ -432,3 +432,16 @@ components:
             search: { type: string }
             direct: { type: string }
             articleSearch: { type: string }
+            articleDirect: { type: string }
+            delegated:
+              type: array
+              items:
+                type: object
+                properties:
+                  kind: { type: string }
+                  lawName: { type: string }
+                  jo: { type: string }
+                  search: { type: string }
+                  direct: { type: string }
+                  articleSearch: { type: string }
+                  articleDirect: { type: string }
