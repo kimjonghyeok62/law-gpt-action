@@ -363,7 +363,16 @@ app.post("/law/text", async (req, res) => {
       efYd: efYd ? String(efYd) : undefined,
       apiKey: LAW_OC
     });
-    mcpToResponse(res, result);
+    const rawText = result.content?.[0]?.text ?? "";
+    const meta = extractLawTextMeta(rawText, { lawNameHint: lawName, joHint: jo });
+    const links = buildArticleLinks(meta.lawName, meta.joDisplay);
+    const formattedText = formatLawTextSimple(rawText, { lawNameHint: lawName, joHint: jo });
+    res.json({
+      success: !result.isError,
+      asOfDate: new Date().toISOString().slice(0, 10),
+      text: formattedText,
+      links
+    });
   } catch (error) {
     res.status(500).json({
       error: "getLawText ?ㅽ뻾 以??ㅻ쪟",
@@ -408,6 +417,58 @@ app.post("/law/three-tier", async (req, res) => {
 function mcpToResponse(res, result) {
   const text = result.content?.[0]?.text ?? "";
   res.json({ success: !result.isError, asOfDate: new Date().toISOString().slice(0, 10), text });
+}
+
+function extractLawTextMeta(rawText, options = {}) {
+  const text = String(rawText || "").replace(/\r\n/g, "\n");
+  const lawNameFromText = (text.match(/법령명\s*[:：]\s*(.+)/)?.[1] || "").trim();
+  const lawName = lawNameFromText || String(options.lawNameHint || "").trim() || "요청하신 법령";
+  const headerMatch = text.match(/^제\s*\d+조(?:의\s*\d+)?\s*\([^)]+\)/m);
+  const joDisplay = (headerMatch?.[0].match(/제\s*\d+조(?:의\s*\d+)?/)?.[0] || String(options.joHint || "").trim() || "").replace(/\s+/g, "");
+  return { lawName, joDisplay };
+}
+
+function buildArticleLinks(lawName, joDisplay) {
+  const base = buildLawSourceLinks(lawName);
+  const query = encodeURIComponent(`${lawName} ${joDisplay}`.trim());
+  return {
+    ...base,
+    articleSearch: `https://www.law.go.kr/lsSc.do?query=${query}`
+  };
+}
+
+function formatLawTextSimple(rawText, options = {}) {
+  const text = String(rawText || "").replace(/\r\n/g, "\n").trim();
+  if (!text) return text;
+
+  const meta = extractLawTextMeta(text, options);
+  const lawName = meta.lawName;
+
+  const articleHeaderRegex = /^제\s*\d+조(?:의\s*\d+)?\s*\([^)]+\)/m;
+  const headerMatch = text.match(articleHeaderRegex);
+  if (!headerMatch || headerMatch.index == null) {
+    return text;
+  }
+
+  const articleStart = headerMatch.index;
+  const afterHeader = text.slice(articleStart + headerMatch[0].length);
+  const nextHeaderRel = afterHeader.search(/\n제\s*\d+조(?:의\s*\d+)?\s*\([^)]+\)/);
+  const articleEnd = nextHeaderRel >= 0 ? articleStart + headerMatch[0].length + nextHeaderRel : text.length;
+  const articleBlock = text.slice(articleStart, articleEnd).trim();
+
+  const joDisplay = (headerMatch[0].match(/제\s*\d+조(?:의\s*\d+)?/)?.[0] || meta.joDisplay || "해당 조문")
+    .replace(/\s+/g, "");
+  const links = buildArticleLinks(lawName, joDisplay);
+
+  let out = `${lawName} ${joDisplay} 조문입니다.\n\n${articleBlock}\n\n조문 링크: ${links.articleSearch}`;
+
+  if (/대통령령으로\s*정하는\s*바/.test(articleBlock)) {
+    out += `\n\n"대통령령으로 정하는 바"가 필요하시면 관련 시행령 조문을 추가로 조회해 드릴 수 있습니다. 필요하시면 말씀해 주세요!`;
+  } else if (/(총리령|부령|교육부령)으로\s*정하는\s*바/.test(articleBlock)) {
+    out += `\n\n"부령/총리령으로 정하는 바"가 필요하시면 관련 시행규칙 조문을 추가로 조회해 드릴 수 있습니다. 필요하시면 말씀해 주세요!`;
+  }
+
+  return out.trim();
 }
 
 app.post("/gov/assistant", async (req, res) => {
