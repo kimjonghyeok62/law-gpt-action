@@ -146,6 +146,15 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/privacy", (req, res) => {
+  res.type("text/html").send(`
+    <h1>개인정보 보호정책</h1>
+    <p>본 서비스는 법령 조회 목적으로만 운영되며, 사용자의 개인정보를 수집·저장하지 않습니다.</p>
+    <p>모든 법령 데이터는 국가법령정보센터(law.go.kr) 공공 API를 통해 실시간 조회됩니다.</p>
+    <p>문의: hyok96@gmail.com</p>
+  `);
+});
+
 app.post("/law/search", async (req, res) => {
   try {
     const { query } = req.body;
