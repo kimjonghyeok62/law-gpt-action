@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { XMLParser } from "fast-xml-parser";
 import { LawApiClient } from "./korean-law-mcp/build/lib/api-client.js";
+import { buildJO } from "./korean-law-mcp/build/lib/law-parser.js";
 
 dotenv.config();
 
@@ -232,6 +233,10 @@ function parseLawTextJson(rawText) {
   };
 }
 
+app.get("/", (req, res) => {
+  res.json({ ok: true, message: "Korean Law GPT Action API", endpoints: ["/law/search", "/law/text", "/law/three-tier"] });
+});
+
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
@@ -276,10 +281,15 @@ app.post("/law/text", async (req, res) => {
       });
     }
 
+    let joCode = jo ? String(jo) : undefined;
+    if (joCode && !/^\d{6}$/.test(joCode)) {
+      try { joCode = buildJO(joCode); } catch { /* 변환 실패 시 원본 사용 */ }
+    }
+
     const raw = await apiClient.getLawText({
       mst: mst ? String(mst) : undefined,
       lawId: lawId ? String(lawId) : undefined,
-      jo: jo ? String(jo) : undefined,
+      jo: joCode,
       efYd: efYd ? String(efYd) : undefined,
       apiKey: LAW_OC
     });
