@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import crypto from "crypto";
 import { XMLParser } from "fast-xml-parser";
 import { LawApiClient } from "./korean-law-mcp/build/lib/api-client.js";
 import { getLawText } from "./korean-law-mcp/build/tools/law-text.js";
@@ -8,7 +9,6 @@ import { searchOrdinance } from "./korean-law-mcp/build/tools/ordinance-search.j
 import { getOrdinance } from "./korean-law-mcp/build/tools/ordinance.js";
 import { searchPrecedents, getPrecedentText } from "./korean-law-mcp/build/tools/precedents.js";
 import { searchHistoricalLaw, getHistoricalLaw } from "./korean-law-mcp/build/tools/historical-law.js";
-import { getArticleHistory } from "./korean-law-mcp/build/tools/article-history.js";
 import { getAnnexes } from "./korean-law-mcp/build/tools/annex.js";
 
 dotenv.config();
@@ -18,11 +18,25 @@ const app = express();
 app.use(cors());
 app.use(express.json({ type: "application/json" }));
 
+// Minimal audit log: keep only route/meta, never raw 민원 원문 body
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on("finish", () => {
+    const durationMs = Date.now() - startedAt;
+    const bodyText = req.body ? JSON.stringify(req.body) : "";
+    const bodyHash = bodyText ? crypto.createHash("sha256").update(bodyText).digest("hex").slice(0, 12) : null;
+    console.log(
+      `[AUDIT] ${new Date().toISOString()} ${req.method} ${req.originalUrl} status=${res.statusCode} ms=${durationMs} bodyHash=${bodyHash}`
+    );
+  });
+  next();
+});
+
 const PORT = process.env.PORT || 3000;
 const ACTION_TOKEN = process.env.ACTION_TOKEN || "";
 const LAW_OC = process.env.LAW_OC || "";
 
-console.log("ACTION_TOKEN =", JSON.stringify(ACTION_TOKEN));
+console.log("ACTION_TOKEN configured =", !!ACTION_TOKEN);
 console.log("LAW_OC exists =", !!LAW_OC);
 
 const apiClient = new LawApiClient({ apiKey: LAW_OC });
@@ -45,8 +59,8 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-// 테스트 끝날 때까지 잠시 끔
-// app.use(authMiddleware);
+// ?뚯뒪???앸궇 ?뚭퉴吏 ?좎떆 ??
+app.use(authMiddleware);
 
 function toArray(value) {
   if (value == null) return [];
@@ -77,29 +91,28 @@ function findValueByKeyIncludes(obj, includesList) {
 function parseSearchLawXml(xmlText) {
   const parsed = xmlParser.parse(xmlText);
   const root = parsed?.LawSearch || parsed;
-
   const rawItems = root?.law || root?.Law || [];
   const items = toArray(rawItems);
 
   const results = items.map((item) => {
     const lawName =
-      normalizeText(findValueByKeyIncludes(item, ["법령명", "법령명한글"])) ||
-      normalizeText(item.lawName);
+      normalizeText(findValueByKeyIncludes(item, ["lawName", "법령명", "법령명한글"])) ||
+      normalizeText(item.lawName || item["법령명한글"] || item["법령명"]);
 
     const lawId =
-      normalizeText(findValueByKeyIncludes(item, ["법령ID"])) ||
-      normalizeText(item.ID);
+      normalizeText(findValueByKeyIncludes(item, ["lawId", "ID", "법령ID"])) ||
+      normalizeText(item.ID || item["법령ID"]);
 
     const mst =
-      normalizeText(findValueByKeyIncludes(item, ["법령일련번호"])) ||
-      normalizeText(item.MST);
+      normalizeText(findValueByKeyIncludes(item, ["MST", "법령일련번호"])) ||
+      normalizeText(item.MST || item["법령일련번호"]);
 
-    const promulgationDate = normalizeText(findValueByKeyIncludes(item, ["공포일자", "공포일"]));
-    const effectiveDate = normalizeText(findValueByKeyIncludes(item, ["시행일자", "시행일"]));
+    const promulgationDate = normalizeText(findValueByKeyIncludes(item, ["promulgationDate", "공포일자", "공포일"]));
+    const effectiveDate = normalizeText(findValueByKeyIncludes(item, ["effectiveDate", "시행일자", "시행일"]));
     const lawType =
-      normalizeText(findValueByKeyIncludes(item, ["법령구분명", "법종구분", "법령종류"])) ||
+      normalizeText(findValueByKeyIncludes(item, ["lawType", "법령구분명", "법종구분", "법령종류"])) ||
       normalizeText(findValueByKeyIncludes(item, ["구분"]));
-    const ministryName = normalizeText(findValueByKeyIncludes(item, ["소관부처명"]));
+    const ministryName = normalizeText(findValueByKeyIncludes(item, ["소관부처명", "ministryName"]));
 
     return {
       lawName,
@@ -115,14 +128,187 @@ function parseSearchLawXml(xmlText) {
 
   return {
     target: root?.target,
-    keyword: root?.키워드 || root?.query,
+    keyword: root?.query || root?.keyword,
     count: Number(root?.totalCnt || results.length || 0),
     results
   };
 }
 
+function formatYmdDot(raw) {
+  const s = String(raw || "").replace(/[^0-9]/g, "");
+  if (s.length !== 8) return String(raw || "");
+  return `${s.slice(0, 4)}.${s.slice(4, 6)}.${s.slice(6, 8)}`;
+}
+
+function toYmd(raw) {
+  const s = String(raw || "").replace(/[^0-9]/g, "");
+  return s.length === 8 ? s : "";
+}
+
+function ymdYearsAgo(years) {
+  const now = new Date();
+  const d = new Date(now.getFullYear() - years, now.getMonth(), now.getDate());
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
+}
+
+function parseRecentYears({ recentYears, periodText }) {
+  if (Number.isFinite(Number(recentYears)) && Number(recentYears) > 0) {
+    return Math.min(30, Math.max(1, Number(recentYears)));
+  }
+
+  const text = String(periodText || "").trim();
+  if (!text) return null;
+
+  const exact = text.match(/최근\s*(\d{1,2})\s*년/);
+  if (exact) return Math.min(30, Math.max(1, Number(exact[1])));
+
+  const fuzzy = /(최근\s*몇\s*년|최근\s*수년|최근\s*몇년)/.test(text);
+  if (fuzzy) return 3;
+
+  return null;
+}
+
+function normalizeJoInput(jo) {
+  const s = String(jo || "").trim();
+  if (!s) return null;
+  const m = s.match(/(\d+)(?:\D+(\d+))?/);
+  if (!m) return null;
+  return { article: Number(m[1]), branch: m[2] ? Number(m[2]) : 0 };
+}
+
+function formatJoDisplay(rawJoNo) {
+  const digits = String(rawJoNo || "").replace(/[^0-9]/g, "");
+  if (digits.length === 6) {
+    const article = Number(digits.slice(0, 4));
+    const branch = Number(digits.slice(4, 6));
+    return branch > 0 ? `제${article}조의${branch}` : `제${article}조`;
+  }
+  if (/^\d+$/.test(digits)) return `제${Number(digits)}조`;
+  return String(rawJoNo || "");
+}
+
+function joMatches(recordJoNo, recordDisplay, inputJo) {
+  if (!inputJo) return true;
+  const target = normalizeJoInput(inputJo);
+  if (!target) return true;
+  const recDigits = String(recordJoNo || "").replace(/[^0-9]/g, "");
+
+  if (recDigits.length === 6) {
+    const article = Number(recDigits.slice(0, 4));
+    const branch = Number(recDigits.slice(4, 6));
+    return article === target.article && branch === target.branch;
+  }
+
+  const displayNorm = String(recordDisplay || "").replace(/\s/g, "");
+  const targetLabel = target.branch > 0 ? `제${target.article}조의${target.branch}` : `제${target.article}조`;
+  return displayNorm.includes(targetLabel);
+}
+
+function collectLawNodes(obj, out = []) {
+  if (!obj || typeof obj !== "object") return out;
+  if (Array.isArray(obj)) {
+    obj.forEach((v) => collectLawNodes(v, out));
+    return out;
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === "law" || k === "Law") {
+      toArray(v).forEach((n) => out.push(n));
+    } else if (v && typeof v === "object") {
+      collectLawNodes(v, out);
+    }
+  }
+  return out;
+}
+
+function pickByIncludes(obj, includesList) {
+  if (!obj || typeof obj !== "object") return "";
+  for (const [key, value] of Object.entries(obj)) {
+    const keyStr = String(key);
+    if (includesList.some((part) => keyStr.includes(part))) {
+      return normalizeText(value);
+    }
+  }
+  return "";
+}
+
+function tokenizeKoreanText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^0-9a-z가-힣\s]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 2);
+}
+
+function classifyCivilQuestion(question) {
+  const q = String(question || "");
+  const rules = [
+    { category: "인허가", keywords: ["허가", "인가", "등록", "신고", "승인", "면허"] },
+    { category: "행정처분", keywords: ["처분", "과태료", "영업정지", "취소", "시정명령", "행정벌"] },
+    { category: "계약", keywords: ["계약", "입찰", "낙찰", "계약해지", "용역", "공사"] },
+    { category: "인사", keywords: ["징계", "인사", "전보", "승진", "채용", "휴직"] },
+    { category: "복무", keywords: ["복무", "근태", "출장", "연가", "당직", "초과근무"] }
+  ];
+
+  for (const rule of rules) {
+    if (rule.keywords.some((k) => q.includes(k))) return rule.category;
+  }
+  return "일반행정";
+}
+
+function inferJurisdictionAndPriority(lawResults) {
+  const text = lawResults.map((r) => `${r.lawType || ""} ${r.lawName || ""}`).join(" ");
+  const hasOrdinance = /조례|규칙|자치/.test(text);
+  const hasAdminRule = /훈령|고시|예규|행정규칙/.test(text);
+  const hasNational = /법률|시행령|시행규칙|법/.test(text);
+
+  const priority = [];
+  if (hasNational) priority.push("국가법령");
+  if (hasOrdinance) priority.push("자치법규");
+  if (hasAdminRule) priority.push("행정규칙");
+
+  let guidance = "국가법령 > 자치법규 > 행정규칙 순서로 충돌 여부를 확인하세요.";
+  if (hasOrdinance && !hasNational) {
+    guidance = "자치법규 중심 사안입니다. 상위법 위임 범위와 충돌 여부를 우선 확인하세요.";
+  }
+
+  return { priority, guidance };
+}
+
+function buildLawSourceLinks(lawName) {
+  const q = encodeURIComponent(String(lawName || ""));
+  return {
+    search: `https://www.law.go.kr/lsSc.do?query=${q}`,
+    direct: `https://www.law.go.kr/법령/${q}`
+  };
+}
+
+function selectInternalRules(internalRules, question, maxCount = 3) {
+  const qTokens = new Set(tokenizeKoreanText(question));
+  const normalized = Array.isArray(internalRules) ? internalRules : [];
+  const candidates = normalized.map((item, idx) => {
+    const title = typeof item === "string" ? `내부기준-${idx + 1}` : String(item?.title || `내부기준-${idx + 1}`);
+    const content = typeof item === "string" ? item : String(item?.content || "");
+    const tokens = tokenizeKoreanText(`${title} ${content}`);
+    const overlap = tokens.filter((t) => qTokens.has(t)).length;
+    return { title, content, overlap };
+  });
+
+  return candidates
+    .filter((c) => c.overlap > 0 || c.content.length > 0)
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, maxCount)
+    .map((c) => ({
+      title: c.title,
+      excerpt: c.content.slice(0, 240),
+      relevance: c.overlap
+    }));
+}
+
 app.get("/", (req, res) => {
-  res.json({ ok: true, message: "Korean Law GPT Action API", endpoints: ["/law/search", "/law/text", "/law/three-tier", "/law/ordinance/search", "/law/ordinance/text", "/law/precedent/search", "/law/precedent/text", "/law/annex", "/law/history", "/law/history/text", "/law/article-history"] });
+  res.json({ ok: true, message: "Korean Law GPT Action API", endpoints: ["/law/search", "/law/text", "/law/three-tier", "/law/ordinance/search", "/law/ordinance/text", "/law/precedent/search", "/law/precedent/text", "/law/annex", "/law/history", "/law/history/text", "/law/article-history", "/gov/assistant"] });
 });
 
 app.get("/health", (req, res) => {
@@ -130,7 +316,7 @@ app.get("/health", (req, res) => {
     ok: true,
     message: "PARSED_DIRECT_IMPORT_SERVER",
     hasLawOc: !!LAW_OC,
-    actionTokenRaw: ACTION_TOKEN
+    hasActionToken: !!ACTION_TOKEN
   });
 });
 
@@ -139,7 +325,7 @@ app.post("/law/search", async (req, res) => {
     const { query } = req.body;
 
     if (!query) {
-      return res.status(400).json({ error: "query가 필요합니다." });
+      return res.status(400).json({ error: "query媛 ?꾩슂?⑸땲??" });
     }
 
     const raw = await apiClient.searchLaw(String(query), LAW_OC);
@@ -153,7 +339,7 @@ app.post("/law/search", async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({
-      error: "searchLaw 실행 중 오류",
+      error: "searchLaw ?ㅽ뻾 以??ㅻ쪟",
       detail: error instanceof Error ? error.message : String(error)
     });
   }
@@ -161,17 +347,18 @@ app.post("/law/search", async (req, res) => {
 
 app.post("/law/text", async (req, res) => {
   try {
-    const { mst, lawId, jo, efYd } = req.body;
+    const { mst, lawId, lawName, jo, efYd } = req.body;
 
-    if (!mst && !lawId) {
+    if (!mst && !lawId && !lawName) {
       return res.status(400).json({
-        error: "mst 또는 lawId 중 하나는 필요합니다."
+        error: "mst ?먮뒗 lawId 以??섎굹???꾩슂?⑸땲??"
       });
     }
 
     const result = await getLawText(apiClient, {
       mst: mst ? String(mst) : undefined,
       lawId: lawId ? String(lawId) : undefined,
+      lawName: lawName ? String(lawName) : undefined,
       jo: jo ? String(jo) : undefined,
       efYd: efYd ? String(efYd) : undefined,
       apiKey: LAW_OC
@@ -179,7 +366,7 @@ app.post("/law/text", async (req, res) => {
     mcpToResponse(res, result);
   } catch (error) {
     res.status(500).json({
-      error: "getLawText 실행 중 오류",
+      error: "getLawText ?ㅽ뻾 以??ㅻ쪟",
       detail: error instanceof Error ? error.message : String(error)
     });
   }
@@ -191,7 +378,7 @@ app.post("/law/three-tier", async (req, res) => {
 
     if (!mst && !lawId) {
       return res.status(400).json({
-        error: "mst 또는 lawId 중 하나는 필요합니다."
+        error: "mst ?먮뒗 lawId 以??섎굹???꾩슂?⑸땲??"
       });
     }
 
@@ -210,24 +397,100 @@ app.post("/law/three-tier", async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({
-      error: "getThreeTier 실행 중 오류",
+      error: "getThreeTier ?ㅽ뻾 以??ㅻ쪟",
       detail: error instanceof Error ? error.message : String(error)
     });
   }
 });
 
-// MCP 도구 결과를 HTTP 응답으로 변환하는 헬퍼
-// 항상 200 반환 — ChatGPT는 4xx를 "대화 오류"로 처리하므로 오류 내용은 text에 담음
+// MCP ?꾧뎄 寃곌낵瑜?HTTP ?묐떟?쇰줈 蹂?섑븯???ы띁
+// ??긽 200 諛섑솚 ??ChatGPT??4xx瑜?"????ㅻ쪟"濡?泥섎━?섎?濡??ㅻ쪟 ?댁슜? text???댁쓬
 function mcpToResponse(res, result) {
   const text = result.content?.[0]?.text ?? "";
-  res.json({ success: !result.isError, text });
+  res.json({ success: !result.isError, asOfDate: new Date().toISOString().slice(0, 10), text });
 }
 
-// ── 자치법규 ──────────────────────────────────────────────
+app.post("/gov/assistant", async (req, res) => {
+  try {
+    const { question, internalRules, maxResults } = req.body || {};
+    if (!question || !String(question).trim()) {
+      return res.status(400).json({ success: false, error: "question is required" });
+    }
+
+    const category = classifyCivilQuestion(question);
+    const asOfDate = new Date().toISOString().slice(0, 10);
+    const resultLimit = Number.isFinite(Number(maxResults)) ? Math.max(1, Math.min(10, Number(maxResults))) : 5;
+
+    const searchRaw = await apiClient.searchLaw(String(question), LAW_OC);
+    const parsed = parseSearchLawXml(searchRaw);
+    const lawResults = (parsed.results || []).slice(0, resultLimit);
+    const jurisdiction = inferJurisdictionAndPriority(lawResults);
+    const matchedInternalRules = selectInternalRules(internalRules, question, 3);
+
+    const lawSources = lawResults.map((r) => ({
+      type: "law",
+      lawName: r.lawName,
+      lawId: r.lawId,
+      mst: r.mst,
+      ...buildLawSourceLinks(r.lawName)
+    }));
+    const internalSources = matchedInternalRules.map((r) => ({
+      type: "internal_rule",
+      title: r.title,
+      excerpt: r.excerpt
+    }));
+    const sources = [...lawSources, ...internalSources];
+
+    // Disable source-less summary mode
+    if (sources.length === 0) {
+      return res.json({
+        success: false,
+        asOfDate,
+        error: "출처가 확인되지 않아 요약을 생성하지 않았습니다.",
+        sourceRequired: true
+      });
+    }
+
+    // Keep response structured and concise (disable long free-form priority)
+    const summary = [
+      `${category} 유형으로 분류되었습니다.`,
+      `${jurisdiction.guidance}`,
+      `기준일: ${asOfDate}`
+    ].join(" ");
+
+    return res.json({
+      success: true,
+      asOfDate,
+      sourceRequired: true,
+      classification: category,
+      jurisdiction,
+      summary: summary.slice(0, 500),
+      laws: lawResults.map((r) => ({
+        lawName: r.lawName,
+        lawId: r.lawId,
+        mst: r.mst,
+        lawType: r.lawType,
+        promulgationDate: r.promulgationDate,
+        effectiveDate: r.effectiveDate,
+        links: buildLawSourceLinks(r.lawName)
+      })),
+      internalRuleMatches: matchedInternalRules,
+      sources
+    });
+  } catch (e) {
+    return res.status(500).json({
+      success: false,
+      asOfDate: new Date().toISOString().slice(0, 10),
+      error: e instanceof Error ? e.message : String(e)
+    });
+  }
+});
+
+// ?? ?먯튂踰뺢퇋 ??????????????????????????????????????????????
 app.post("/law/ordinance/search", async (req, res) => {
   try {
     const { query, display } = req.body;
-    if (!query) return res.status(400).json({ error: "query가 필요합니다." });
+    if (!query) return res.status(400).json({ error: "query媛 ?꾩슂?⑸땲??" });
     const result = await searchOrdinance(apiClient, { query, display: display ?? 20 });
     mcpToResponse(res, result);
   } catch (e) {
@@ -238,7 +501,7 @@ app.post("/law/ordinance/search", async (req, res) => {
 app.post("/law/ordinance/text", async (req, res) => {
   try {
     const { ordinSeq, jo } = req.body;
-    if (!ordinSeq) return res.status(400).json({ error: "ordinSeq가 필요합니다." });
+    if (!ordinSeq) return res.status(400).json({ error: "ordinSeq媛 ?꾩슂?⑸땲??" });
     const result = await getOrdinance(apiClient, { ordinSeq: String(ordinSeq), jo });
     mcpToResponse(res, result);
   } catch (e) {
@@ -246,11 +509,11 @@ app.post("/law/ordinance/text", async (req, res) => {
   }
 });
 
-// ── 판례 ─────────────────────────────────────────────────
+// ?? ?먮? ?????????????????????????????????????????????????
 app.post("/law/precedent/search", async (req, res) => {
   try {
     const { query, court, display, page } = req.body;
-    if (!query) return res.status(400).json({ error: "query가 필요합니다." });
+    if (!query) return res.status(400).json({ error: "query媛 ?꾩슂?⑸땲??" });
     const result = await searchPrecedents(apiClient, {
       query,
       court,
@@ -266,7 +529,7 @@ app.post("/law/precedent/search", async (req, res) => {
 app.post("/law/precedent/text", async (req, res) => {
   try {
     const { id } = req.body;
-    if (!id) return res.status(400).json({ error: "id(판례일련번호)가 필요합니다." });
+    if (!id) return res.status(400).json({ error: "id(?먮??쇰젴踰덊샇)媛 ?꾩슂?⑸땲??" });
     const result = await getPrecedentText(apiClient, { id: String(id) });
     mcpToResponse(res, result);
   } catch (e) {
@@ -274,11 +537,11 @@ app.post("/law/precedent/text", async (req, res) => {
   }
 });
 
-// ── 법령 연혁 ─────────────────────────────────────────────
+// ?? 踰뺣졊 ?고쁺 ?????????????????????????????????????????????
 app.post("/law/history", async (req, res) => {
   try {
     const { lawName, display } = req.body;
-    if (!lawName) return res.status(400).json({ error: "lawName이 필요합니다." });
+    if (!lawName) return res.status(400).json({ error: "lawName???꾩슂?⑸땲??" });
     const result = await searchHistoricalLaw(apiClient, {
       lawName,
       display: display ?? 50,
@@ -289,14 +552,14 @@ app.post("/law/history", async (req, res) => {
   }
 });
 
-// ── 별표/서식 ─────────────────────────────────────────────
+// ?? 蹂꾪몴/?쒖떇 ?????????????????????????????????????????????
 app.post("/law/annex", async (req, res) => {
   try {
     const { lawName, knd, bylSeq, annexNo } = req.body;
-    if (!lawName) return res.status(400).json({ error: "lawName이 필요합니다." });
+    if (!lawName) return res.status(400).json({ error: "lawName???꾩슂?⑸땲??" });
 
-    // 단축 법령명 → 공식 전체명 해석
-    // 예: "학원법 시행규칙" → "학원의 설립·운영 및 과외교습에 관한 법률 시행규칙"
+    // ?⑥텞 踰뺣졊紐???怨듭떇 ?꾩껜紐??댁꽍
+    // ?? "?숈썝踰??쒗뻾洹쒖튃" ??"?숈썝???ㅻ┰쨌?댁쁺 諛?怨쇱쇅援먯뒿??愿??踰뺣쪧 ?쒗뻾洹쒖튃"
     let resolvedName = String(lawName);
     try {
       const searchRaw = await apiClient.searchLaw(resolvedName, LAW_OC);
@@ -309,7 +572,7 @@ app.post("/law/annex", async (req, res) => {
         const best = exact || parsed.results[0];
         if (best?.lawName) resolvedName = best.lawName;
       }
-    } catch (_) { /* 검색 실패 시 원래 이름 유지 */ }
+    } catch (_) { /* 寃???ㅽ뙣 ???먮옒 ?대쫫 ?좎? */ }
 
     const result = await getAnnexes(apiClient, { lawName: resolvedName, knd, bylSeq, annexNo, apiKey: LAW_OC });
     mcpToResponse(res, result);
@@ -318,98 +581,124 @@ app.post("/law/annex", async (req, res) => {
   }
 });
 
-// ── 조문별 개정 이력 ─────────────────────────────────────
-// lsJoHstInf API가 타법개정 등 일부 유형을 누락하므로,
-// searchHistoricalLaw → getHistoricalLaw 체인으로 재구현
+// ?? 議곕Ц蹂?媛쒖젙 ?대젰 ?????????????????????????????????????
+// lsJoHstInf API媛 ?踰뺢컻?????쇰? ?좏삎???꾨씫?섎?濡?
+// searchHistoricalLaw ??getHistoricalLaw 泥댁씤?쇰줈 ?ш뎄??
 app.post("/law/article-history", async (req, res) => {
   try {
-    const { lawName, lawId, jo, fromRegDt, toRegDt } = req.body;
+    const { lawName, lawId, jo, fromRegDt, toRegDt, recentYears, periodText, limit } = req.body;
     if (!lawName && !lawId) return res.status(400).json({ error: "lawName 또는 lawId가 필요합니다." });
 
-    // 법령명 확보 (lawId만 있는 경우 searchLaw로 이름 조회)
-    let resolvedName = lawName ? String(lawName) : null;
-    if (!resolvedName && lawId) {
-      try {
-        const raw = await apiClient.searchLaw(String(lawId), LAW_OC);
-        const parsed = parseSearchLawXml(raw);
-        resolvedName = parsed.results[0]?.lawName || String(lawId);
-      } catch (_) {
-        resolvedName = String(lawId);
+    let resolvedLawId = lawId ? String(lawId) : undefined;
+    let resolvedLawName = lawName ? String(lawName) : undefined;
+    if (!resolvedLawId && resolvedLawName) {
+      const raw = await apiClient.searchLaw(resolvedLawName, LAW_OC);
+      const parsedSearch = parseSearchLawXml(raw);
+      const normalized = resolvedLawName.replace(/\s/g, "");
+      const exact = parsedSearch.results.find((r) => (r.lawName || "").replace(/\s/g, "") === normalized);
+      const pick = exact || parsedSearch.results[0];
+      if (!pick?.lawId) {
+        return res.json({ success: false, text: `'${resolvedLawName}' 법령을 찾지 못했습니다.` });
+      }
+      resolvedLawId = pick.lawId;
+      resolvedLawName = pick.lawName || resolvedLawName;
+    }
+
+    const inferredYears = parseRecentYears({ recentYears, periodText });
+    const effectiveFromRegDt = fromRegDt
+      ? String(fromRegDt)
+      : (inferredYears ? ymdYearsAgo(inferredYears) : undefined);
+    const effectiveToRegDt = toRegDt ? String(toRegDt) : undefined;
+    const pageLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(50, Number(limit))) : 10;
+
+    const rawXml = await apiClient.getArticleHistory({
+      lawId: resolvedLawId,
+      jo: undefined,
+      fromRegDt: effectiveFromRegDt,
+      toRegDt: effectiveToRegDt,
+      page: 1,
+      apiKey: LAW_OC
+    });
+
+    const parsed = xmlParser.parse(rawXml);
+    const lawNodes = collectLawNodes(parsed);
+    if (lawNodes.length === 0) {
+      return res.json({ success: false, text: "개정 이력이 없습니다." });
+    }
+
+    const records = [];
+    for (const lawNode of lawNodes) {
+      const lawInfo = lawNode["법령정보"] || lawNode.lawInfo || lawNode["LawInfo"] || {};
+      const lawNameFromRow =
+        pickByIncludes(lawInfo, ["법령명한글", "법령명", "lawName"]) ||
+        String(resolvedLawName || "");
+      const lawIdFromRow = pickByIncludes(lawInfo, ["법령ID", "lawId", "ID"]) || String(resolvedLawId || "");
+      const mst = pickByIncludes(lawInfo, ["법령일련번호", "MST"]);
+      const promulgationDate = pickByIncludes(lawInfo, ["공포일자", "promulgationDate"]);
+
+      const joNodes = toArray(lawNode.jo || lawNode.JO || lawNode["조"] || []);
+      for (const joNode of joNodes) {
+        const joNo = pickByIncludes(joNode, ["조문번호", "joNo", "JO"]);
+        const joDisplay = formatJoDisplay(joNo);
+        if (!joMatches(joNo, joDisplay, jo)) continue;
+
+        const joRegDt = pickByIncludes(joNode, ["조문개정일", "regDt", "개정일"]);
+        const joEffDt = pickByIncludes(joNode, ["조문시행일", "effDt", "시행일"]);
+        const changeReason = pickByIncludes(joNode, ["변경사유", "changeReason"]);
+
+        records.push({
+          lawName: lawNameFromRow,
+          lawId: lawIdFromRow,
+          mst,
+          joNo,
+          joDisplay,
+          joRegDt,
+          joEffDt,
+          promulgationDate,
+          changeReason
+        });
       }
     }
 
-    // 1단계: 전체 연혁 MST 목록 조회
-    const histResult = await searchHistoricalLaw(apiClient, { lawName: resolvedName, display: 100 });
-    const histText = histResult.content?.[0]?.text || "";
-    if (histResult.isError || !histText) {
-      return res.json({ success: false, text: `'${resolvedName}' 연혁을 찾을 수 없습니다.` });
+    if (records.length === 0) {
+      return res.json({ success: false, text: "요청한 조항의 개정 이력이 없습니다." });
     }
 
-    // 연혁 텍스트 파싱: "시행: YYYY.MM.DD | ...\n   MST: NNNNNN"
-    const versionPattern = /시행:\s*(\d{4})\.(\d{2})\.(\d{2})[\s\S]*?MST:\s*(\d+)/g;
-    const versions = [];
-    let m;
-    while ((m = versionPattern.exec(histText)) !== null) {
-      const efDt = `${m[1]}${m[2]}${m[3]}`; // YYYYMMDD
-      versions.push({ efDt, mst: m[4] });
-    }
-
-    if (versions.length === 0) {
-      return res.json({ success: false, text: `'${resolvedName}' 연혁 파싱 실패:\n${histText}` });
-    }
-
-    // 2단계: 날짜 범위 필터
-    const from = fromRegDt ? String(fromRegDt) : null;
-    const to = toRegDt ? String(toRegDt) : null;
-    let filtered = versions.filter((v) => {
-      if (from && v.efDt < from) return false;
-      if (to && v.efDt > to) return false;
-      return true;
+    records.sort((a, b) => {
+      const aDate = toYmd(a.joRegDt) || toYmd(a.promulgationDate) || "00000000";
+      const bDate = toYmd(b.joRegDt) || toYmd(b.promulgationDate) || "00000000";
+      if (aDate !== bDate) return bDate.localeCompare(aDate);
+      return String(b.mst || "").localeCompare(String(a.mst || ""));
     });
 
-    // 범위 미지정 시 최근 5개만
-    if (!from && !to) {
-      filtered = versions.slice(0, 5);
+    const sliced = records.slice(0, pageLimit);
+    const scopeText = effectiveFromRegDt
+      ? `조회기간: ${formatYmdDot(effectiveFromRegDt)} ~ ${effectiveToRegDt ? formatYmdDot(effectiveToRegDt) : "현재"}\n`
+      : "조회기간: 전체(최신순)\n";
+
+    let text = `${sliced[0].lawName || lawName || lawId} 조문 개정이력 (최신순)\n${scopeText}\n`;
+    sliced.forEach((r, idx) => {
+      text += `${idx + 1}. ${r.joDisplay}\n`;
+      text += `   - 개정일: ${formatYmdDot(r.joRegDt || r.promulgationDate || "") || "정보없음"}\n`;
+      text += `   - 시행일: ${formatYmdDot(r.joEffDt || "") || "정보없음"}\n`;
+      if (r.changeReason) text += `   - 변경사유: ${r.changeReason}\n`;
+      if (r.lawId || r.mst) text += `   - lawId: ${r.lawId || "-"}, MST: ${r.mst || "-"}\n`;
+      text += "\n";
+    });
+
+    if (records.length > sliced.length) {
+      text += `... 총 ${records.length}건 중 ${sliced.length}건 표시\n`;
     }
 
-    if (filtered.length === 0) {
-      const rangeDesc = from || to ? `${from || "처음"} ~ ${to || "현재"}` : "";
-      return res.json({ success: false, text: `해당 기간(${rangeDesc})에 개정 이력이 없습니다. 전체 연혁:\n${histText}` });
-    }
-
-    // 3단계: jo 지정 시 각 버전 조문 텍스트 조회 (최대 10개)
-    if (jo) {
-      const limit = filtered.slice(0, 10);
-      const joResults = await Promise.all(
-        limit.map(async (v) => {
-          try {
-            const r = await getHistoricalLaw(apiClient, { mst: v.mst, jo: String(jo), apiKey: LAW_OC });
-            const text = r.content?.[0]?.text || "";
-            return `[시행일 ${v.efDt.replace(/(\d{4})(\d{2})(\d{2})/, "$1.$2.$3")} / MST:${v.mst}]\n${text}`;
-          } catch (e) {
-            return `[시행일 ${v.efDt} / MST:${v.mst}] 조회 오류: ${e.message}`;
-          }
-        })
-      );
-      const output = `${resolvedName} ${jo} 개정 이력 (${limit.length}개 버전):\n\n` + joResults.join("\n\n---\n\n");
-      return res.json({ success: true, text: output });
-    }
-
-    // jo 미지정 시 연혁 목록만 반환
-    const listText = filtered
-      .map((v) => `시행일: ${v.efDt.replace(/(\d{4})(\d{2})(\d{2})/, "$1.$2.$3")} | MST: ${v.mst}`)
-      .join("\n");
-    return res.json({ success: true, text: `${resolvedName} 개정 이력 (${filtered.length}건):\n\n${listText}\n\n조문 내용을 보려면 jo 파라미터를 지정하세요.` });
+    return res.json({ success: true, text });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
-
-// ── 과거 버전 조문 조회 ────────────────────────────────────
 app.post("/law/history/text", async (req, res) => {
   try {
     const { mst, jo } = req.body;
-    if (!mst) return res.status(400).json({ error: "mst가 필요합니다." });
+    if (!mst) return res.status(400).json({ error: "mst媛 ?꾩슂?⑸땲??" });
     const result = await getHistoricalLaw(apiClient, { mst: String(mst), jo, apiKey: LAW_OC });
     mcpToResponse(res, result);
   } catch (e) {
