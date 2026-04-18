@@ -8,6 +8,7 @@ import { searchOrdinance } from "./korean-law-mcp/build/tools/ordinance-search.j
 import { getOrdinance } from "./korean-law-mcp/build/tools/ordinance.js";
 import { searchPrecedents, getPrecedentText } from "./korean-law-mcp/build/tools/precedents.js";
 import { searchHistoricalLaw } from "./korean-law-mcp/build/tools/historical-law.js";
+import { getAnnexes } from "./korean-law-mcp/build/tools/annex.js";
 
 dotenv.config();
 
@@ -281,6 +282,18 @@ app.post("/law/history", async (req, res) => {
       lawName,
       display: display ?? 50,
     });
+    mcpToResponse(res, result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── 별표/서식 ─────────────────────────────────────────────
+app.post("/law/annex", async (req, res) => {
+  try {
+    const { lawName, knd, bylSeq, annexNo } = req.body;
+    if (!lawName) return res.status(400).json({ error: "lawName이 필요합니다." });
+    const result = await getAnnexes(apiClient, { lawName, knd, bylSeq, annexNo, apiKey: LAW_OC });
     mcpToResponse(res, result);
   } catch (e) {
     res.status(500).json({ error: e.message });
