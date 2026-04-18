@@ -7,7 +7,8 @@ import { getLawText } from "./korean-law-mcp/build/tools/law-text.js";
 import { searchOrdinance } from "./korean-law-mcp/build/tools/ordinance-search.js";
 import { getOrdinance } from "./korean-law-mcp/build/tools/ordinance.js";
 import { searchPrecedents, getPrecedentText } from "./korean-law-mcp/build/tools/precedents.js";
-import { searchHistoricalLaw } from "./korean-law-mcp/build/tools/historical-law.js";
+import { searchHistoricalLaw, getHistoricalLaw } from "./korean-law-mcp/build/tools/historical-law.js";
+import { getArticleHistory } from "./korean-law-mcp/build/tools/article-history.js";
 import { getAnnexes } from "./korean-law-mcp/build/tools/annex.js";
 
 dotenv.config();
@@ -121,7 +122,7 @@ function parseSearchLawXml(xmlText) {
 }
 
 app.get("/", (req, res) => {
-  res.json({ ok: true, message: "Korean Law GPT Action API", endpoints: ["/law/search", "/law/text", "/law/three-tier", "/law/ordinance/search", "/law/ordinance/text", "/law/precedent/search", "/law/precedent/text", "/law/history"] });
+  res.json({ ok: true, message: "Korean Law GPT Action API", endpoints: ["/law/search", "/law/text", "/law/three-tier", "/law/ordinance/search", "/law/ordinance/text", "/law/precedent/search", "/law/precedent/text", "/law/annex", "/law/history", "/law/history/text", "/law/article-history"] });
 });
 
 app.get("/health", (req, res) => {
@@ -294,6 +295,30 @@ app.post("/law/annex", async (req, res) => {
     const { lawName, knd, bylSeq, annexNo } = req.body;
     if (!lawName) return res.status(400).json({ error: "lawName이 필요합니다." });
     const result = await getAnnexes(apiClient, { lawName, knd, bylSeq, annexNo, apiKey: LAW_OC });
+    mcpToResponse(res, result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── 조문별 개정 이력 ─────────────────────────────────────
+app.post("/law/article-history", async (req, res) => {
+  try {
+    const { lawName, lawId, jo, fromRegDt, toRegDt, page } = req.body;
+    if (!lawName && !lawId) return res.status(400).json({ error: "lawName 또는 lawId가 필요합니다." });
+    const result = await getArticleHistory(apiClient, { lawName, lawId, jo, fromRegDt, toRegDt, page, apiKey: LAW_OC });
+    mcpToResponse(res, result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── 과거 버전 조문 조회 ────────────────────────────────────
+app.post("/law/history/text", async (req, res) => {
+  try {
+    const { mst, jo } = req.body;
+    if (!mst) return res.status(400).json({ error: "mst가 필요합니다." });
+    const result = await getHistoricalLaw(apiClient, { mst: String(mst), jo, apiKey: LAW_OC });
     mcpToResponse(res, result);
   } catch (e) {
     res.status(500).json({ error: e.message });

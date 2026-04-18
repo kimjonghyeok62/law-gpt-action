@@ -258,7 +258,7 @@ paths:
     post:
       operationId: getLawHistory
       summary: 법령 연혁 조회
-      description: "법령명으로 개정 이력(연혁)을 조회합니다. 각 버전의 mst를 확보하면 /law/text로 과거 조문도 조회 가능합니다."
+      description: "법령명으로 개정 이력(연혁)을 조회합니다. 각 버전의 mst를 확보하면 /law/history/text로 과거 조문도 조회 가능합니다."
       requestBody:
         required: true
         content:
@@ -283,3 +283,81 @@ paths:
                 properties:
                   success: { type: boolean }
                   text: { type: string }
+
+  /law/history/text:
+    post:
+      operationId: getHistoricalLawText
+      summary: 과거 버전 조문 조회
+      description: |
+        특정 시점(MST)의 법령 조문을 조회합니다.
+        - /law/history로 MST를 먼저 확보하세요.
+        - jo를 지정하면 해당 조문만, 생략하면 전체 조문 목록을 반환합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mst:
+                  type: string
+                  description: "법령일련번호 (/law/history에서 획득)"
+                jo:
+                  type: string
+                  description: "조문 번호 (예: '제38조', '38'). 생략 시 전체 목록 반환"
+              required: [mst]
+      responses:
+        "200":
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  text: { type: string }
+
+  /law/article-history:
+    post:
+      operationId: getArticleHistory
+      summary: 조문별 개정 이력 조회
+      description: |
+        특정 법령(또는 조문)의 개정 이력을 날짜 범위로 조회합니다.
+        - fromRegDt ~ toRegDt 사이에 개정된 조문 목록을 반환합니다.
+        - jo를 지정하면 해당 조문만 필터링합니다.
+        - 결과의 MST로 /law/history/text를 호출하면 해당 시점 조문 원문을 볼 수 있습니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lawName:
+                  type: string
+                  description: "법령명 (예: '학원법', '민법'). lawId 대신 사용 가능"
+                lawId:
+                  type: string
+                  description: "법령ID (lawName 대신 사용 가능)"
+                jo:
+                  type: string
+                  description: "특정 조문 필터 (예: '제38조'). 생략 시 전체 조문"
+                fromRegDt:
+                  type: string
+                  description: "조회 시작일 (YYYYMMDD, 예: '20150101')"
+                toRegDt:
+                  type: string
+                  description: "조회 종료일 (YYYYMMDD, 예: '20201231')"
+                page:
+                  type: integer
+                  description: "페이지 번호 (기본 1)"
+      responses:
+        "200":
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  text: { type: string, description: "개정 이력 목록 (공포일, 시행일, 변경사유, MST 포함)" }
