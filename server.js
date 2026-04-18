@@ -181,28 +181,62 @@ app.post("/law/text", async (req, res) => {
       });
     }
 
+    // Stabilize identifier resolution: resolve lawName -> mst/lawId at server layer first.
+    let resolvedMst = mst ? String(mst) : undefined;
+    let resolvedLawId = lawId ? String(lawId) : undefined;
+    let resolvedLawName = lawName ? String(lawName) : undefined;
+
+    if (!resolvedMst && !resolvedLawId && resolvedLawName) {
+      const searchRaw = await apiClient.searchLaw(resolvedLawName, LAW_OC);
+      const parsed = parseSearchLawXml(searchRaw);
+      if (!parsed.results || parsed.results.length === 0) {
+        return res.json({
+          success: false,
+          asOfDate: new Date().toISOString().slice(0, 10),
+          text: `'${resolvedLawName}' 법령을 찾을 수 없습니다. 법령명을 확인해 주세요.`
+        });
+      }
+
+      const normalizedInput = resolvedLawName.replace(/\s/g, "");
+      const exact = parsed.results.find((r) => String(r.lawName || "").replace(/\s/g, "") === normalizedInput);
+      const best = exact || parsed.results[0];
+      resolvedMst = best?.mst ? String(best.mst) : undefined;
+      resolvedLawId = best?.lawId ? String(best.lawId) : undefined;
+      resolvedLawName = best?.lawName || resolvedLawName;
+    }
+
     const result = await getLawText(apiClient, {
-      mst: mst ? String(mst) : undefined,
-      lawId: lawId ? String(lawId) : undefined,
-      lawName: lawName ? String(lawName) : undefined,
+      mst: resolvedMst,
+      lawId: resolvedLawId,
+      lawName: resolvedLawName,
       jo: jo ? String(jo) : undefined,
       efYd: efYd ? String(efYd) : undefined,
       apiKey: LAW_OC
     });
     const rawText = result.content?.[0]?.text ?? "";
-    const meta = extractLawTextMeta(rawText, { lawNameHint: lawName, joHint: jo });
-    const links = buildArticleLinks(meta.lawName, meta.joDisplay);
-    const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay);
-    const formattedText = formatLawTextSimple(rawText, { lawNameHint: lawName, joHint: jo });
-    res.json({
-      success: !result.isError,
-      asOfDate: new Date().toISOString().slice(0, 10),
-      text: formattedText,
-      links: {
-        ...links,
-        delegated: delegatedLinks
-      }
-    });
+
+    // Never fail request only because formatting failed; fallback to raw text.
+    try {
+      const meta = extractLawTextMeta(rawText, { lawNameHint: resolvedLawName, joHint: jo });
+      const links = buildArticleLinks(meta.lawName, meta.joDisplay);
+      const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay);
+      const formattedText = formatLawTextSimple(rawText, { lawNameHint: resolvedLawName, joHint: jo });
+      res.json({
+        success: !result.isError,
+        asOfDate: new Date().toISOString().slice(0, 10),
+        text: formattedText,
+        links: {
+          ...links,
+          delegated: delegatedLinks
+        }
+      });
+    } catch (_) {
+      res.json({
+        success: !result.isError,
+        asOfDate: new Date().toISOString().slice(0, 10),
+        text: rawText
+      });
+    }
   } catch (error) {
     res.status(500).json({
       error: "getLawText ??쎈뻬 餓???살첒",
