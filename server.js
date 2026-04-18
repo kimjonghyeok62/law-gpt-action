@@ -232,11 +232,13 @@ app.post("/law/text", async (req, res) => {
       const meta = extractLawTextMeta(rawText, { lawNameHint: resolvedLawName, joHint: joParsed.joForLookup || jo });
       const links = buildArticleLinks(meta.lawName, meta.joDisplay);
       let delegatedLinks = await resolveExactDelegations(resolvedMst, resolvedLawId, meta.joDisplay);
-      if (delegatedLinks) {
+      if (delegatedLinks === null) {
+        // 3단비교 API 오류 → 텍스트 패턴 fallback (includeFallback=false: 명시적 위임 문구 있을 때만)
+        delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, false);
+      } else if (delegatedLinks.length > 0) {
         delegatedLinks = await resolveSecondLevelDelegations(delegatedLinks);
-      } else {
-        delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, true);
       }
+      // delegatedLinks === [] → 위임 없음, 시행령 표시 안 함
       const formattedText = formatLawTextSimple(rawText, {
         lawNameHint: resolvedLawName,
         joHint: joParsed.joForLookup || jo,
@@ -276,6 +278,21 @@ app.post("/law/text", async (req, res) => {
             }
           })
         );
+      }
+
+      // Also fetch referenced laws (「법령명」 제X조 patterns in main text)
+      if (needRelated) {
+        const lawRefs = extractLawReferences(rawText)
+          .filter(r => !delegatedLinks.some(d => d.lawName === r.lawName))
+          .slice(0, 2);
+        for (const ref of lawRefs) {
+          try {
+            const rr = await getLawText(apiClient, { lawName: ref.lawName, jo: ref.jo, apiKey: LAW_OC });
+            const rraw = rr.content?.[0]?.text ?? "";
+            const rtxt = formatLawTextSimple(rraw, { lawNameHint: ref.lawName, joHint: ref.jo, kindPrefix: "참조" });
+            relatedSections.push({ kind: "참조법령", lawName: ref.lawName, jo: ref.jo, text: rtxt, link: buildArticleLinks(ref.lawName, ref.jo).articleDirect });
+          } catch { /* skip */ }
+        }
       }
 
       if (relatedSections.length > 0) {
@@ -392,6 +409,23 @@ function buildArticleLinks(lawName, joDisplay) {
   }
 }
 
+function extractLawReferences(articleBlock) {
+  const refs = []
+  const seen = new Set()
+  const re = /「([^」]{2,30})」\s*(제\s*\d+조(?:의\s*\d+)?)/g
+  let m
+  while ((m = re.exec(String(articleBlock || ""))) !== null) {
+    const lawName = m[1].trim()
+    const jo = m[2].replace(/\s+/g, "")
+    const key = `${lawName}|${jo}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      refs.push({ lawName, jo })
+    }
+  }
+  return refs
+}
+
 function extractJoFromText(text) {
   const m = String(text || "").match(/제\s*(\d+)조(?:의\s*(\d+))?/)
   if (!m) return null
@@ -408,7 +442,8 @@ async function resolveExactDelegations(mst, lawId, joDisplay) {
     // Normalize joDisplay for matching (e.g. "제23조" → "제23조")
     const normalizedJo = String(joDisplay || "").replace(/\s+/g, "");
     const article = articles.find(a => a.joNum.replace(/\s+/g, "") === normalizedJo);
-    if (!article || article.delegations.length === 0) return null;
+    // Return [] (not null) when API worked but no delegations — caller should NOT fallback to text-based detection
+    if (!article || article.delegations.length === 0) return [];
 
     const results = [];
     const seen = new Set();
@@ -420,7 +455,6 @@ async function resolveExactDelegations(mst, lawId, joDisplay) {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      // Resolve the real law name from meta
       let lawName = d.lawName;
       if (!lawName || lawName === meta.sihyungryungName || lawName === meta.sihyungkyuchikName) {
         if (d.type === "시행령") lawName = meta.sihyungryungName || d.lawName;
@@ -435,9 +469,9 @@ async function resolveExactDelegations(mst, lawId, joDisplay) {
       });
     }
 
-    return results.length > 0 ? results : null;
+    return results; // may be [] if no valid jo mappings
   } catch {
-    return null;
+    return null; // null = API error → caller should fallback
   }
 }
 
@@ -634,21 +668,24 @@ function extractClauseBlock(articleBlock, clauseNo) {
 
 function emphasizeKeyPhrases(input) {
   let out = String(input || "")
-  const patterns = [
-    /대통령령으로\s*정하는\s*바/g,
-    /(총리령|부령|교육부령)으로\s*정하는\s*바/g,
-    /시행령/g,
-    /시행규칙/g,
-    /하여야\s*한다/g,
-    /할\s*수\s*있다/g,
-    /해서는\s*안\s*된다/g,
-    /초과하여\s*징수/g,
-    /게시해야\s*한다/g,
-    /영수증을\s*발급하여야\s*한다/g
-  ]
-  for (const p of patterns) {
-    out = out.replace(p, (m) => `**${m}**`)
-  }
+  // Delegation references
+  out = out.replace(/대통령령으로\s*정하는\s*바/g, (m) => `**${m}**`)
+  out = out.replace(/(총리령|부령|교육부령)으로\s*정하는\s*바/g, (m) => `**${m}**`)
+  out = out.replace(/대통령령으로\s*정한다/g, (m) => `**${m}**`)
+  out = out.replace(/(총리령|부령|교육부령)으로\s*정한다/g, (m) => `**${m}**`)
+  // Key predicate phrases: 2-4 preceding Korean words + predicate ending (~3-8 words total)
+  out = out.replace(
+    /((?:[가-힣0-9·%,]+(?:\s+[가-힣0-9·%,]+){1,3})\s*)(하여야\s*한다|할\s*수\s*있다|해서는\s*안\s*된다|하여야\s*하며|이어야\s*한다|아니한다|않는다|해야\s*한다|하여서는\s*아니\s*된다)/g,
+    (_, pre, ending) => {
+      const trimmed = pre.trimStart()
+      if (!trimmed || trimmed.includes('**')) return _
+      return `**${trimmed}${ending}**`
+    }
+  )
+  // Numbers with legal units
+  out = out.replace(/\d+\s*(?:퍼센트|%)\s*(?:이상|이하|초과|미만)?/g, (m) => `**${m}**`)
+  out = out.replace(/\d+\s*(?:원|만원|억원)\s*(?:이상|이하|초과|미만)?/g, (m) => `**${m}**`)
+  out = out.replace(/\d+\s*(?:일|년|월|개월)\s*(?:이내|이상|이하|초과|미만|이후)?/g, (m) => `**${m}**`)
   return out
 }
 
