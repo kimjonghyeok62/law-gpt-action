@@ -273,7 +273,7 @@ app.post("/law/text", async (req, res) => {
       finalText += `\n\n${buildLinkSummarySection(links, delegatedLinks, relatedSections)}`;
 
       res.json({
-        success: !result.isError,
+        success: true,
         asOfDate: new Date().toISOString().slice(0, 10),
         mustDisplayVerbatim: true,
         displayPolicy: "verbatim_markdown",
@@ -291,7 +291,7 @@ app.post("/law/text", async (req, res) => {
       const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, true);
       const linkSection = buildLinkSummarySection(links, delegatedLinks, []);
       res.json({
-        success: !result.isError,
+        success: !!rawText,
         asOfDate: new Date().toISOString().slice(0, 10),
         mustDisplayVerbatim: true,
         displayPolicy: "verbatim_markdown",
