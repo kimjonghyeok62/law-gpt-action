@@ -459,6 +459,20 @@ function buildLinkSummarySection(baseLinks, delegatedLinks = [], relatedSections
   return lines.join("\n").trim()
 }
 
+function buildBriefExplanation(articleBlock) {
+  const text = String(articleBlock || "").replace(/\r\n/g, "\n").trim()
+  if (!text) return ""
+
+  const firstSentence = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line && !/^제\s*\d+조/.test(line) && !/^\d+\.\s+/.test(line) && !/^[①-⑩]/.test(line))
+
+  if (!firstSentence) return ""
+
+  return `설명: ${emphasizeKeyPhrases(firstSentence)}`
+}
+
 function parseJoAndClause(joInput) {
   const raw = String(joInput || "").trim()
   if (!raw) return { joForLookup: undefined, clauseNo: null }
@@ -554,14 +568,16 @@ function formatLawTextSimple(rawText, options = {}) {
       .replace(/\n(\d+\.\s+)/g, "\n\n$1")
       .replace(/\n(①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩)/g, "\n\n$1")
   );
-  const summary = emphasizeKeyPhrases(summarizeArticleBlock(articleBlockRaw));
+  const briefExplanation = buildBriefExplanation(articleBlockRaw);
 
-  let out = `${lawName} ${joDisplay} 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
+  let out = `${lawName} ${joDisplay} 조문입니다.\n\n---\n\n${readableArticle}`;
   if (options?.clauseNo) {
-    out = `${lawName} ${joDisplay} ${options.clauseNo}항 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
+    out = `${lawName} ${joDisplay} ${options.clauseNo}항 조문입니다.\n\n---\n\n${readableArticle}`;
   }
 
-  out += `\n\n${buildFollowupQuestion(articleBlock, delegatedLinks)}`
+  if (briefExplanation) {
+    out += `\n\n---\n\n${briefExplanation}`;
+  }
 
   return out.trim();
 }
