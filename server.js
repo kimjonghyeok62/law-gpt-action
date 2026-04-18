@@ -215,12 +215,10 @@ app.post("/law/three-tier", async (req, res) => {
 });
 
 // MCP 도구 결과를 HTTP 응답으로 변환하는 헬퍼
+// 항상 200 반환 — ChatGPT는 4xx를 "대화 오류"로 처리하므로 오류 내용은 text에 담음
 function mcpToResponse(res, result) {
   const text = result.content?.[0]?.text ?? "";
-  if (result.isError) {
-    return res.status(400).json({ success: false, text });
-  }
-  res.json({ success: true, text });
+  res.json({ success: !result.isError, text });
 }
 
 // ── 자치법규 ──────────────────────────────────────────────
