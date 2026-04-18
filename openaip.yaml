@@ -430,6 +430,9 @@ components:
         mustDisplayVerbatim:
           type: boolean
           description: "true면 text를 요약/재작성하지 말고 그대로 표시"
+        mustShowLinks:
+          type: boolean
+          description: "true면 링크 섹션을 반드시 함께 표시"
         displayPolicy:
           type: string
           description: "출력 정책 (예: verbatim_markdown)"
@@ -439,6 +442,14 @@ components:
         text:
           type: string
           description: "마크다운 본문. 조문 설명 뒤에 링크 섹션이 포함된다."
+        quickLinks:
+          type: array
+          description: "링크 노출용 요약 목록"
+          items:
+            type: object
+            properties:
+              kind: { type: string }
+              url: { type: string }
         links:
           type: object
           properties:

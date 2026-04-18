@@ -231,6 +231,8 @@ app.post("/law/text", async (req, res) => {
       let finalText = formattedText;
       let relatedSections = [];
       const needRelated = includeRelated !== false && includeRelated !== "false" && includeRelated !== 0;
+      const topLinkSection = buildLinkSummarySection(links, delegatedLinks, []);
+      finalText += `\n\n${topLinkSection}`;
       if (needRelated && delegatedLinks.length > 0) {
         const targets = delegatedLinks.slice(0, 2); // 시행령/시행규칙
         relatedSections = await Promise.all(
@@ -271,14 +273,17 @@ app.post("/law/text", async (req, res) => {
       }
 
       finalText += `\n\n${buildLinkSummarySection(links, delegatedLinks, relatedSections)}`;
+      const quickLinks = buildQuickLinks(links, delegatedLinks, relatedSections);
 
       res.json({
         success: true,
         asOfDate: new Date().toISOString().slice(0, 10),
         mustDisplayVerbatim: true,
+        mustShowLinks: true,
         displayPolicy: "verbatim_markdown",
         responseFormat: "markdown",
         text: finalText,
+        quickLinks,
         links: {
           ...links,
           delegated: delegatedLinks,
@@ -290,13 +295,16 @@ app.post("/law/text", async (req, res) => {
       const links = buildArticleLinks(meta.lawName, meta.joDisplay);
       const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, true);
       const linkSection = buildLinkSummarySection(links, delegatedLinks, []);
+      const quickLinks = buildQuickLinks(links, delegatedLinks, []);
       res.json({
         success: !!rawText,
         asOfDate: new Date().toISOString().slice(0, 10),
         mustDisplayVerbatim: true,
+        mustShowLinks: true,
         displayPolicy: "verbatim_markdown",
         responseFormat: "markdown",
-        text: `${rawText}\n\n${linkSection}`.trim()
+        text: `${rawText}\n\n${linkSection}`.trim(),
+        quickLinks
       });
     }
   } catch (error) {
@@ -442,21 +450,42 @@ function buildLinkSummarySection(baseLinks, delegatedLinks = [], relatedSections
   const lines = ["", "---", "", "**링크**", ""]
   if (baseLinks?.articleDirect) {
     lines.push(`- **원문 조문**: ${baseLinks.articleDirect}`)
+    lines.push(`URL_원문: ${baseLinks.articleDirect}`)
   }
 
   for (const d of delegatedLinks) {
     if (d?.articleDirect) {
       lines.push(`- **${d.kind}**: ${d.articleDirect}`)
+      lines.push(`URL_${d.kind}: ${d.articleDirect}`)
     }
   }
 
   for (const s of relatedSections) {
     if (s?.link) {
       lines.push(`- **관련 ${s.kind}**: ${s.link}`)
+      lines.push(`URL_관련_${s.kind}: ${s.link}`)
     }
   }
 
   return lines.join("\n").trim()
+}
+
+function buildQuickLinks(baseLinks, delegatedLinks = [], relatedSections = []) {
+  const out = []
+  if (baseLinks?.articleDirect) out.push({ kind: "원문 조문", url: baseLinks.articleDirect })
+  for (const d of delegatedLinks) {
+    if (d?.articleDirect) out.push({ kind: d.kind, url: d.articleDirect })
+  }
+  for (const s of relatedSections) {
+    if (s?.link) out.push({ kind: `관련 ${s.kind}`, url: s.link })
+  }
+  const seen = new Set()
+  return out.filter((r) => {
+    const key = `${r.kind}|${r.url}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function buildBriefExplanation(articleBlock) {
