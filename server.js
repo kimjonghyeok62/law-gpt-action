@@ -294,7 +294,24 @@ app.post("/law/annex", async (req, res) => {
   try {
     const { lawName, knd, bylSeq, annexNo } = req.body;
     if (!lawName) return res.status(400).json({ error: "lawName이 필요합니다." });
-    const result = await getAnnexes(apiClient, { lawName, knd, bylSeq, annexNo, apiKey: LAW_OC });
+
+    // 단축 법령명 → 공식 전체명 해석
+    // 예: "학원법 시행규칙" → "학원의 설립·운영 및 과외교습에 관한 법률 시행규칙"
+    let resolvedName = String(lawName);
+    try {
+      const searchRaw = await apiClient.searchLaw(resolvedName, LAW_OC);
+      const parsed = parseSearchLawXml(searchRaw);
+      if (parsed.results.length > 0) {
+        const normalizedInput = resolvedName.replace(/\s/g, "");
+        const exact = parsed.results.find(
+          r => r.lawName && r.lawName.replace(/\s/g, "") === normalizedInput
+        );
+        const best = exact || parsed.results[0];
+        if (best?.lawName) resolvedName = best.lawName;
+      }
+    } catch (_) { /* 검색 실패 시 원래 이름 유지 */ }
+
+    const result = await getAnnexes(apiClient, { lawName: resolvedName, knd, bylSeq, annexNo, apiKey: LAW_OC });
     mcpToResponse(res, result);
   } catch (e) {
     res.status(500).json({ error: e.message });
