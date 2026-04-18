@@ -274,6 +274,7 @@ app.post("/law/text", async (req, res) => {
         success: !result.isError,
         asOfDate: new Date().toISOString().slice(0, 10),
         mustDisplayVerbatim: true,
+        displayPolicy: "verbatim_markdown",
         responseFormat: "markdown",
         text: finalText,
         links: {
@@ -287,6 +288,7 @@ app.post("/law/text", async (req, res) => {
         success: !result.isError,
         asOfDate: new Date().toISOString().slice(0, 10),
         mustDisplayVerbatim: true,
+        displayPolicy: "verbatim_markdown",
         responseFormat: "markdown",
         text: rawText
       });
@@ -338,6 +340,7 @@ function mcpToResponse(res, result) {
     success: !result.isError,
     asOfDate: new Date().toISOString().slice(0, 10),
     mustDisplayVerbatim: true,
+    displayPolicy: "verbatim_markdown",
     responseFormat: "markdown",
     text
   });

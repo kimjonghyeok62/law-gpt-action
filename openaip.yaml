@@ -73,7 +73,7 @@ paths:
     post:
       operationId: getLawText
       summary: 법령 조문 조회
-      description: "mst/lawId/lawName 중 하나로 법령을 찾고, jo 지정 시 해당 조문을 조회합니다. 응답의 text는 Markdown 형식이며 그대로 표시해야 합니다."
+      description: "mst/lawId/lawName 중 하나로 법령을 찾고, jo 지정 시 해당 조문을 조회합니다. 응답의 text는 Markdown 형식이며 그대로 표시해야 합니다. mustDisplayVerbatim=true 또는 displayPolicy=verbatim_markdown이면 text를 요약/재작성하지 말고, 줄바꿈과 굵은 글자 표시를 그대로 유지해 출력하세요."
       requestBody:
         required: true
         content:
@@ -430,6 +430,9 @@ components:
         mustDisplayVerbatim:
           type: boolean
           description: "true면 text를 요약/재작성하지 말고 그대로 표시"
+        displayPolicy:
+          type: string
+          description: "출력 정책 (예: verbatim_markdown)"
         responseFormat:
           type: string
           description: "text 포맷 (예: markdown)"
