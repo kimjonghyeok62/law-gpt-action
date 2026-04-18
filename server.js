@@ -251,7 +251,7 @@ app.post("/law/text", async (req, res) => {
                 apiKey: LAW_OC
               });
               const rraw = rr.content?.[0]?.text ?? "";
-              const rtxt = formatLawTextSimple(rraw, { lawNameHint: d.lawName, joHint: d.jo });
+              const rtxt = formatLawTextSimple(rraw, { lawNameHint: d.lawName, joHint: d.jo, kindPrefix: d.kind });
               return {
                 kind: d.kind,
                 lawName: d.lawName,
@@ -273,10 +273,9 @@ app.post("/law/text", async (req, res) => {
       }
 
       if (relatedSections.length > 0) {
-        finalText += `\n\n---\n\n**관련 법령 동시 조회 결과**\n\n`;
-        finalText += relatedSections
-          .map((s) => `### ${s.kind}\n${s.text}`)
-          .join("\n\n");
+        for (const s of relatedSections) {
+          finalText += `\n\n---\n\n${s.text}`;
+        }
       }
 
       finalText += `\n\n${buildLinkSummarySection(links, delegatedLinks, relatedSections, meta.lawName, meta.joDisplay)}`;
@@ -597,16 +596,26 @@ function formatLawTextSimple(rawText, options = {}) {
     .replace(/\s+/g, "");
 
   const delegatedLinks = buildDelegatedLinks(articleBlock, lawName, joDisplay, true);
+  const fullTitleMatch = articleBlock.match(/^(제\s*\d+조(?:의\s*\d+)?(?:\([^)]+\))?)/)
+  const fullArticleTitle = (fullTitleMatch?.[1] || joDisplay).replace(/\s+/g, " ").trim()
+
+  const kindPrefix = options?.kindPrefix || ""
+  const sectionHeader = kindPrefix
+    ? `**${kindPrefix} ${fullArticleTitle}**`
+    : `**${lawName} ${fullArticleTitle}**`
+
   const readableArticle = emphasizeKeyPhrases(
     articleBlock
+      .replace(/^제\s*\d+조(?:의\s*\d+)?(?:\([^)]+\))?/, "")
+      .trimStart()
       .replace(/\n(\d+\.\s+)/g, "\n\n$1")
       .replace(/\n(①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩)/g, "\n\n$1")
   );
   const briefExplanation = buildBriefExplanation(articleBlockRaw);
 
-  let out = `${lawName} ${joDisplay} 조문입니다.\n\n---\n\n${readableArticle}`;
+  let out = `${sectionHeader}\n\n${readableArticle}`;
   if (options?.clauseNo) {
-    out = `${lawName} ${joDisplay} ${options.clauseNo}항 조문입니다.\n\n---\n\n${readableArticle}`;
+    out = `${sectionHeader} ${options.clauseNo}항\n\n${readableArticle}`;
   }
 
   if (briefExplanation) {
