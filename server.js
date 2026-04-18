@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { XMLParser } from "fast-xml-parser";
 import { LawApiClient } from "./korean-law-mcp/build/lib/api-client.js";
 import { buildJO } from "./korean-law-mcp/build/lib/law-parser.js";
+import { flattenContent, extractHangContent, cleanHtml } from "./korean-law-mcp/build/lib/article-parser.js";
 
 dotenv.config();
 
@@ -184,42 +185,39 @@ function extractArticleInfo(parsed) {
     findNestedObjectByKeyIncludes(parsed, ["조문"]) ||
     {};
 
-  const articleUnit =
-    articleContainer?.조문단위 ||
-    articleContainer?.조문 ||
-    articleContainer;
+  const unitRaw = articleContainer?.조문단위 || articleContainer?.조문 || articleContainer;
+  const units = toArray(unitRaw);
 
-  const articleNumber = normalizeText(
-    findValueByKeyIncludes(articleUnit, ["조문번호", "조번호"])
+  // 조문여부 === "조문"인 항목 우선, 없으면 첫 번째
+  const articleUnit = units.find(u => u?.조문여부 === "조문") || units[0] || {};
+
+  const articleNumber = normalizeText(articleUnit.조문번호 || articleUnit.조문가지번호
+    ? (articleUnit.조문가지번호 && articleUnit.조문가지번호 !== "0"
+        ? `제${articleUnit.조문번호}조의${articleUnit.조문가지번호}`
+        : `제${articleUnit.조문번호}조`)
+    : findValueByKeyIncludes(articleUnit, ["조문번호", "조번호"])
   );
 
   const title = normalizeText(
-    findValueByKeyIncludes(articleUnit, ["조문제목", "조제목", "제목"])
+    articleUnit.조문제목 || findValueByKeyIncludes(articleUnit, ["조문제목", "조제목", "제목"])
   );
 
-  const body =
-    normalizeText(findValueByKeyIncludes(articleUnit, ["조문내용", "조문본문"])) ||
-    normalizeText(findValueByKeyIncludes(articleUnit, ["본문", "내용"]));
+  // 조문내용은 배열일 수 있으므로 flattenContent 사용
+  const rawContent = articleUnit.조문내용 ?? findValueByKeyIncludes(articleUnit, ["조문내용", "조문본문"]);
+  const body = rawContent != null
+    ? cleanHtml(typeof rawContent === "string" ? rawContent : flattenContent(rawContent))
+    : "";
 
-  const paraRaw =
-    articleUnit?.항 ||
-    articleUnit?.항목 ||
-    findValueByKeyIncludes(articleUnit, ["항"]);
+  // 항 처리: 항내용도 배열일 수 있음
+  const paraRaw = articleUnit.항 || findValueByKeyIncludes(articleUnit, ["항"]);
+  const paraArray = toArray(paraRaw);
 
-  const paragraphs = toArray(paraRaw).map((p) => ({
-    number: normalizeText(findValueByKeyIncludes(p, ["항번호", "번호"])),
-    text:
-      normalizeText(findValueByKeyIncludes(p, ["항내용"])) ||
-      normalizeText(findValueByKeyIncludes(p, ["본문", "내용"])),
-    raw: p
+  const paragraphs = paraArray.map((p) => ({
+    number: normalizeText(p.항번호 || findValueByKeyIncludes(p, ["항번호", "번호"])),
+    text: cleanHtml(extractHangContent(p))
   }));
 
-  return {
-    articleNumber,
-    title,
-    body,
-    paragraphs
-  };
+  return { articleNumber, title, body, paragraphs };
 }
 
 function parseLawTextJson(rawText) {
