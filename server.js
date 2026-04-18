@@ -273,6 +273,8 @@ app.post("/law/text", async (req, res) => {
       res.json({
         success: !result.isError,
         asOfDate: new Date().toISOString().slice(0, 10),
+        mustDisplayVerbatim: true,
+        responseFormat: "markdown",
         text: finalText,
         links: {
           ...links,
@@ -284,6 +286,8 @@ app.post("/law/text", async (req, res) => {
       res.json({
         success: !result.isError,
         asOfDate: new Date().toISOString().slice(0, 10),
+        mustDisplayVerbatim: true,
+        responseFormat: "markdown",
         text: rawText
       });
     }
@@ -330,7 +334,13 @@ app.post("/law/three-tier", async (req, res) => {
 // ??湲?200 獄쏆꼹????ChatGPT??4xx??"??????살첒"嚥?筌ｌ꼶????嚥???살첒 ??곸뒠?? text????곸벉
 function mcpToResponse(res, result) {
   const text = result.content?.[0]?.text ?? "";
-  res.json({ success: !result.isError, asOfDate: new Date().toISOString().slice(0, 10), text });
+  res.json({
+    success: !result.isError,
+    asOfDate: new Date().toISOString().slice(0, 10),
+    mustDisplayVerbatim: true,
+    responseFormat: "markdown",
+    text
+  });
 }
 
 function extractLawTextMeta(rawText, options = {}) {
