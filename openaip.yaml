@@ -73,7 +73,7 @@ paths:
     post:
       operationId: getLawText
       summary: 법령 조문 조회
-      description: "mst/lawId/lawName 중 하나로 법령을 찾고, jo 지정 시 해당 조문을 조회합니다. 기본 동작은 본법 조문과 함께 관련 시행령/시행규칙도 같이 조회하는 것입니다. 응답의 text는 Markdown 형식이며 그대로 표시해야 합니다. 본문 뒤에는 반드시 링크 섹션이 오며, 여기에는 원문 조문 링크와 관련 시행령/시행규칙 링크가 포함됩니다. mustDisplayVerbatim=true 또는 displayPolicy=verbatim_markdown이면 text를 요약/재작성하지 말고, 줄바꿈과 굵은 글자 표시를 그대로 유지해 출력하세요. includeRelated를 false로 주면 관련 법령 동시 조회를 끌 수 있습니다."
+      description: "mst/lawId/lawName으로 법령을 찾고 jo로 조문을 조회합니다. 기본값은 관련 시행령/시행규칙 동시 조회이며, 응답 text는 Markdown 그대로 표시해야 합니다. includeRelated=false면 관련 법령 동시 조회를 끌 수 있습니다."
       requestBody:
         required: true
         content:
