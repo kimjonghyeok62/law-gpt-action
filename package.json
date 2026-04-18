@@ -4,6 +4,7 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
+    "build": "cd korean-law-mcp && npm install && npm run build",
     "start": "node server.js"
   },
   "dependencies": {
@@ -11,6 +12,6 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
-    "fast-xml-parser": "^5.7.1"
+    "fast-xml-parser": "^4.5.0"
   }
 }
