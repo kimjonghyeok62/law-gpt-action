@@ -231,8 +231,6 @@ app.post("/law/text", async (req, res) => {
       let finalText = formattedText;
       let relatedSections = [];
       const needRelated = includeRelated !== false && includeRelated !== "false" && includeRelated !== 0;
-      const topLinkSection = buildLinkSummarySection(links, delegatedLinks, []);
-      finalText += `\n\n${topLinkSection}`;
       if (needRelated && delegatedLinks.length > 0) {
         const targets = delegatedLinks.slice(0, 2); // 시행령/시행규칙
         relatedSections = await Promise.all(
@@ -268,7 +266,7 @@ app.post("/law/text", async (req, res) => {
       if (relatedSections.length > 0) {
         finalText += `\n\n---\n\n**관련 법령 동시 조회 결과**\n\n`;
         finalText += relatedSections
-          .map((s) => `### ${s.kind}\n${s.text}\n\n링크: ${s.link}`)
+          .map((s) => `### ${s.kind}\n${s.text}`)
           .join("\n\n");
       }
 
@@ -447,26 +445,21 @@ function buildFollowupQuestion(articleBlock, delegatedLinks = []) {
 }
 
 function buildLinkSummarySection(baseLinks, delegatedLinks = [], relatedSections = []) {
-  const lines = ["", "---", "", "**링크**", ""]
+  const lines = ["", "---", "", "**원문 링크 (국가법령정보센터)**", ""]
   if (baseLinks?.articleDirect) {
-    lines.push(`- **원문 조문**: ${baseLinks.articleDirect}`)
-    lines.push(`URL_원문: ${baseLinks.articleDirect}`)
+    lines.push(`- [원문 조문 바로가기](${baseLinks.articleDirect})`)
   }
-
   for (const d of delegatedLinks) {
-    if (d?.articleDirect) {
-      lines.push(`- **${d.kind}**: ${d.articleDirect}`)
-      lines.push(`URL_${d.kind}: ${d.articleDirect}`)
+    const fetched = relatedSections.find(s => s.kind === d.kind);
+    if (!fetched && d?.articleDirect) {
+      lines.push(`- [${d.kind} 바로가기](${d.articleDirect})`)
     }
   }
-
   for (const s of relatedSections) {
     if (s?.link) {
-      lines.push(`- **관련 ${s.kind}**: ${s.link}`)
-      lines.push(`URL_관련_${s.kind}: ${s.link}`)
+      lines.push(`- [${s.kind} 원문 바로가기](${s.link})`)
     }
   }
-
   return lines.join("\n").trim()
 }
 
@@ -609,6 +602,98 @@ function formatLawTextSimple(rawText, options = {}) {
   }
 
   return out.trim();
+}
+
+function buildLawSourceLinks(lawName) {
+  const name = String(lawName || "").trim();
+  const encoded = encodeURIComponent(name);
+  return {
+    search: `https://www.law.go.kr/lsSc.do?query=${encoded}`,
+    direct: `https://www.law.go.kr/법령/${encoded}`
+  };
+}
+
+function classifyCivilQuestion(question) {
+  const q = String(question || "");
+  if (/학원|교습|과외/.test(q)) return "학원·교육 관련";
+  if (/계약|입찰|낙찰|용역/.test(q)) return "계약·조달 관련";
+  if (/아동|청소년|복지/.test(q)) return "복지 관련";
+  if (/토지|건물|부동산/.test(q)) return "부동산·재산 관련";
+  if (/처벌|과태료|형사/.test(q)) return "행정처분·형사 관련";
+  return "일반 행정";
+}
+
+function inferJurisdictionAndPriority(lawResults) {
+  const ministries = [...new Set((lawResults || []).map(r => r.ministryName).filter(Boolean))];
+  return {
+    guidance: ministries.length > 0 ? `소관부처: ${ministries.join(", ")}` : "관할 미확인",
+    ministries
+  };
+}
+
+function selectInternalRules(internalRules, question, limit = 3) {
+  if (!internalRules || internalRules.length === 0) return [];
+  const rules = internalRules.map(r => {
+    if (typeof r === "string") return { title: "", content: r, excerpt: r.slice(0, 100) };
+    return { title: r.title || "", content: r.content || "", excerpt: (r.content || "").slice(0, 100) };
+  });
+  return rules.slice(0, limit);
+}
+
+function collectLawNodes(parsed) {
+  const root = parsed?.LawHstInfo || parsed?.lawHstInfo || parsed;
+  const items = root?.law || root?.Law || [];
+  return Array.isArray(items) ? items : (items ? [items] : []);
+}
+
+function pickByIncludes(obj, keys) {
+  if (!obj || typeof obj !== "object") return undefined;
+  for (const [k, v] of Object.entries(obj)) {
+    if (keys.some(s => String(k).includes(s))) {
+      const str = String(v ?? "").trim();
+      return str || undefined;
+    }
+  }
+  return undefined;
+}
+
+function parseRecentYears({ recentYears, periodText } = {}) {
+  if (Number.isFinite(Number(recentYears)) && Number(recentYears) > 0) return Number(recentYears);
+  const m = String(periodText || "").match(/(\d+)\s*년/);
+  if (m) return Number(m[1]);
+  if (/최근/.test(String(periodText || ""))) return 3;
+  return null;
+}
+
+function ymdYearsAgo(years) {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - years);
+  return d.toISOString().slice(0, 10).replace(/-/g, "");
+}
+
+function formatYmdDot(ymd) {
+  const s = String(ymd || "").replace(/\D/g, "");
+  if (s.length >= 8) return `${s.slice(0, 4)}.${s.slice(4, 6)}.${s.slice(6, 8)}`;
+  return ymd ? String(ymd) : "";
+}
+
+function formatJoDisplay(joNo) {
+  const s = String(joNo || "");
+  const m = s.match(/(\d+)(?:[_\-](\d+))?/);
+  if (!m) return s;
+  return m[2] ? `제${Number(m[1])}조의${Number(m[2])}` : `제${Number(m[1])}조`;
+}
+
+function joMatches(joNo, joDisplay, joFilter) {
+  if (!joFilter) return true;
+  const f = String(joFilter).replace(/\s/g, "");
+  const d = String(joDisplay || "").replace(/\s/g, "");
+  const n = String(joNo || "").replace(/\s/g, "");
+  return d === f || n === f || d.startsWith(f) || f.startsWith(d);
+}
+
+function toYmd(dateStr) {
+  return String(dateStr || "").replace(/\D/g, "").slice(0, 8);
 }
 
 app.post("/gov/assistant", async (req, res) => {
