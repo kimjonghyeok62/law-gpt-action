@@ -319,12 +319,87 @@ app.post("/law/annex", async (req, res) => {
 });
 
 // ── 조문별 개정 이력 ─────────────────────────────────────
+// lsJoHstInf API가 타법개정 등 일부 유형을 누락하므로,
+// searchHistoricalLaw → getHistoricalLaw 체인으로 재구현
 app.post("/law/article-history", async (req, res) => {
   try {
-    const { lawName, lawId, jo, fromRegDt, toRegDt, page } = req.body;
+    const { lawName, lawId, jo, fromRegDt, toRegDt } = req.body;
     if (!lawName && !lawId) return res.status(400).json({ error: "lawName 또는 lawId가 필요합니다." });
-    const result = await getArticleHistory(apiClient, { lawName, lawId, jo, fromRegDt, toRegDt, page, apiKey: LAW_OC });
-    mcpToResponse(res, result);
+
+    // 법령명 확보 (lawId만 있는 경우 searchLaw로 이름 조회)
+    let resolvedName = lawName ? String(lawName) : null;
+    if (!resolvedName && lawId) {
+      try {
+        const raw = await apiClient.searchLaw(String(lawId), LAW_OC);
+        const parsed = parseSearchLawXml(raw);
+        resolvedName = parsed.results[0]?.lawName || String(lawId);
+      } catch (_) {
+        resolvedName = String(lawId);
+      }
+    }
+
+    // 1단계: 전체 연혁 MST 목록 조회
+    const histResult = await searchHistoricalLaw(apiClient, { lawName: resolvedName, display: 100 });
+    const histText = histResult.content?.[0]?.text || "";
+    if (histResult.isError || !histText) {
+      return res.json({ success: false, text: `'${resolvedName}' 연혁을 찾을 수 없습니다.` });
+    }
+
+    // 연혁 텍스트 파싱: "시행: YYYY.MM.DD | ...\n   MST: NNNNNN"
+    const versionPattern = /시행:\s*(\d{4})\.(\d{2})\.(\d{2})[\s\S]*?MST:\s*(\d+)/g;
+    const versions = [];
+    let m;
+    while ((m = versionPattern.exec(histText)) !== null) {
+      const efDt = `${m[1]}${m[2]}${m[3]}`; // YYYYMMDD
+      versions.push({ efDt, mst: m[4] });
+    }
+
+    if (versions.length === 0) {
+      return res.json({ success: false, text: `'${resolvedName}' 연혁 파싱 실패:\n${histText}` });
+    }
+
+    // 2단계: 날짜 범위 필터
+    const from = fromRegDt ? String(fromRegDt) : null;
+    const to = toRegDt ? String(toRegDt) : null;
+    let filtered = versions.filter((v) => {
+      if (from && v.efDt < from) return false;
+      if (to && v.efDt > to) return false;
+      return true;
+    });
+
+    // 범위 미지정 시 최근 5개만
+    if (!from && !to) {
+      filtered = versions.slice(0, 5);
+    }
+
+    if (filtered.length === 0) {
+      const rangeDesc = from || to ? `${from || "처음"} ~ ${to || "현재"}` : "";
+      return res.json({ success: false, text: `해당 기간(${rangeDesc})에 개정 이력이 없습니다. 전체 연혁:\n${histText}` });
+    }
+
+    // 3단계: jo 지정 시 각 버전 조문 텍스트 조회 (최대 10개)
+    if (jo) {
+      const limit = filtered.slice(0, 10);
+      const joResults = await Promise.all(
+        limit.map(async (v) => {
+          try {
+            const r = await getHistoricalLaw(apiClient, { mst: v.mst, jo: String(jo), apiKey: LAW_OC });
+            const text = r.content?.[0]?.text || "";
+            return `[시행일 ${v.efDt.replace(/(\d{4})(\d{2})(\d{2})/, "$1.$2.$3")} / MST:${v.mst}]\n${text}`;
+          } catch (e) {
+            return `[시행일 ${v.efDt} / MST:${v.mst}] 조회 오류: ${e.message}`;
+          }
+        })
+      );
+      const output = `${resolvedName} ${jo} 개정 이력 (${limit.length}개 버전):\n\n` + joResults.join("\n\n---\n\n");
+      return res.json({ success: true, text: output });
+    }
+
+    // jo 미지정 시 연혁 목록만 반환
+    const listText = filtered
+      .map((v) => `시행일: ${v.efDt.replace(/(\d{4})(\d{2})(\d{2})/, "$1.$2.$3")} | MST: ${v.mst}`)
+      .join("\n");
+    return res.json({ success: true, text: `${resolvedName} 개정 이력 (${filtered.length}건):\n\n${listText}\n\n조문 내용을 보려면 jo 파라미터를 지정하세요.` });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
