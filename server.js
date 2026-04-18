@@ -5,6 +5,10 @@ import { XMLParser } from "fast-xml-parser";
 import { LawApiClient } from "./korean-law-mcp/build/lib/api-client.js";
 import { buildJO } from "./korean-law-mcp/build/lib/law-parser.js";
 import { flattenContent, extractHangContent, cleanHtml } from "./korean-law-mcp/build/lib/article-parser.js";
+import { searchOrdinance } from "./korean-law-mcp/build/tools/ordinance-search.js";
+import { getOrdinance } from "./korean-law-mcp/build/tools/ordinance.js";
+import { searchPrecedents, getPrecedentText } from "./korean-law-mcp/build/tools/precedents.js";
+import { searchHistoricalLaw } from "./korean-law-mcp/build/tools/historical-law.js";
 
 dotenv.config();
 
@@ -336,6 +340,81 @@ app.post("/law/three-tier", async (req, res) => {
       error: "getThreeTier 실행 중 오류",
       detail: error instanceof Error ? error.message : String(error)
     });
+  }
+});
+
+// MCP 도구 결과를 HTTP 응답으로 변환하는 헬퍼
+function mcpToResponse(res, result) {
+  const text = result.content?.[0]?.text ?? "";
+  if (result.isError) {
+    return res.status(400).json({ success: false, text });
+  }
+  res.json({ success: true, text });
+}
+
+// ── 자치법규 ──────────────────────────────────────────────
+app.post("/law/ordinance/search", async (req, res) => {
+  try {
+    const { query, display } = req.body;
+    if (!query) return res.status(400).json({ error: "query가 필요합니다." });
+    const result = await searchOrdinance(apiClient, { query, display: display ?? 20 });
+    mcpToResponse(res, result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/law/ordinance/text", async (req, res) => {
+  try {
+    const { ordinSeq, jo } = req.body;
+    if (!ordinSeq) return res.status(400).json({ error: "ordinSeq가 필요합니다." });
+    const result = await getOrdinance(apiClient, { ordinSeq: String(ordinSeq), jo });
+    mcpToResponse(res, result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── 판례 ─────────────────────────────────────────────────
+app.post("/law/precedent/search", async (req, res) => {
+  try {
+    const { query, court, display, page } = req.body;
+    if (!query) return res.status(400).json({ error: "query가 필요합니다." });
+    const result = await searchPrecedents(apiClient, {
+      query,
+      court,
+      display: display ?? 20,
+      page: page ?? 1,
+    });
+    mcpToResponse(res, result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/law/precedent/text", async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: "id(판례일련번호)가 필요합니다." });
+    const result = await getPrecedentText(apiClient, { id: String(id) });
+    mcpToResponse(res, result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── 법령 연혁 ─────────────────────────────────────────────
+app.post("/law/history", async (req, res) => {
+  try {
+    const { lawName, display } = req.body;
+    if (!lawName) return res.status(400).json({ error: "lawName이 필요합니다." });
+    const result = await searchHistoricalLaw(apiClient, {
+      lawName,
+      display: display ?? 50,
+    });
+    mcpToResponse(res, result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
