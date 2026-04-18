@@ -366,6 +366,44 @@ function buildFollowupQuestion(articleBlock, delegatedLinks = []) {
   }
   return `추천 질문: "이 조문을 민원 회신 문장으로 5줄 이내로 작성해줘."`
 }
+
+function emphasizeKeyPhrases(input) {
+  let out = String(input || "")
+  const patterns = [
+    /대통령령으로\s*정하는\s*바/g,
+    /(총리령|부령|교육부령)으로\s*정하는\s*바/g,
+    /시행령/g,
+    /시행규칙/g,
+    /하여야\s*한다/g,
+    /할\s*수\s*있다/g,
+    /해서는\s*안\s*된다/g,
+    /초과하여\s*징수/g,
+    /게시해야\s*한다/g,
+    /영수증을\s*발급하여야\s*한다/g
+  ]
+  for (const p of patterns) {
+    out = out.replace(p, (m) => `**${m}**`)
+  }
+  return out
+}
+
+function summarizeArticleBlock(articleBlock) {
+  const text = String(articleBlock || "").replace(/\r\n/g, "\n").trim()
+  const firstSentence = (text.match(/(.+?[다\.])(?:\n|$)/)?.[1] || "").trim()
+  const numbered = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /^\d+\.\s+/.test(l))
+    .map((l) => l.replace(/^\d+\.\s+/, ""))
+
+  const lines = []
+  if (firstSentence) lines.push(`핵심: ${firstSentence}`)
+  if (numbered.length > 0) {
+    lines.push(`적용 범위: ${numbered.join(", ")}`)
+  }
+  return lines.join("\n")
+}
+
 function formatLawTextSimple(rawText, options = {}) {
   const text = String(rawText || "").replace(/\r\n/g, "\n").trim();
   if (!text) return text;
@@ -390,8 +428,16 @@ function formatLawTextSimple(rawText, options = {}) {
 
   const links = buildArticleLinks(lawName, joDisplay);
   const delegatedLinks = buildDelegatedLinks(articleBlock, lawName, joDisplay);
+  const readableArticle = emphasizeKeyPhrases(
+    articleBlock
+      .replace(/\n(\d+\.\s+)/g, "\n\n$1")
+      .replace(/\n(①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩)/g, "\n\n$1")
+  );
+  const summary = emphasizeKeyPhrases(summarizeArticleBlock(articleBlock));
 
-  let out = `${lawName} ${joDisplay} 조문입니다.\n\n${articleBlock}\n\n조문 링크: ${links.articleDirect}`;
+  let out = `${lawName} ${joDisplay} 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
+
+  out += `\n\n원문 링크: ${links.articleDirect}`;
 
   if (delegatedLinks.length > 0) {
     out += `\n` + delegatedLinks.map((d) => `${d.kind} 링크: ${d.articleDirect}`).join("\n");
