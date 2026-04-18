@@ -307,6 +307,31 @@ function buildDelegatedLinks(articleBlock, lawName, currentJo) {
 
   return delegated
 }
+
+function buildFollowupQuestion(articleBlock, delegatedLinks = []) {
+  const exec = delegatedLinks.find((d) => d.kind === "시행령")
+  const rule = delegatedLinks.find((d) => d.kind === "시행규칙")
+
+  if (exec?.jo) {
+    return `추천 질문: "이 조문에서 말하는 기준을 ${exec.lawName} ${exec.jo} 기준으로 풀어서 설명해줘."`
+  }
+  if (exec) {
+    return `추천 질문: "이 조문에서 말하는 기준을 ${exec.lawName} 기준으로 구체적으로 설명해줘."`
+  }
+  if (rule?.jo) {
+    return `추천 질문: "실무 제출서류·절차를 ${rule.lawName} ${rule.jo} 기준으로 정리해줘."`
+  }
+  if (rule) {
+    return `추천 질문: "실무 제출서류·절차를 ${rule.lawName} 기준으로 정리해줘."`
+  }
+  if (/처벌|과태료|제재/.test(articleBlock)) {
+    return `추천 질문: "이 조문 위반 시 처분·과태료·형사처벌 기준을 표로 정리해줘."`
+  }
+  if (/신고|허가|등록|승인/.test(articleBlock)) {
+    return `추천 질문: "이 조문 기준으로 신청요건·구비서류·처리기한을 체크리스트로 만들어줘."`
+  }
+  return `추천 질문: "이 조문을 민원 회신 문장으로 5줄 이내로 작성해줘."`
+}
 function formatLawTextSimple(rawText, options = {}) {
   const text = String(rawText || "").replace(/\r\n/g, "\n").trim();
   if (!text) return text;
@@ -338,11 +363,7 @@ function formatLawTextSimple(rawText, options = {}) {
     out += `\n` + delegatedLinks.map((d) => `${d.kind} 링크: ${d.articleDirect}`).join("\n");
   }
 
-  if (/대통령령으로\s*정하는\s*바/.test(articleBlock)) {
-    out += `\n\n"대통령령으로 정하는 바"가 필요하시면 관련 시행령 조문을 추가로 조회해 드릴 수 있습니다. 필요하시면 말씀해 주세요!`;
-  } else if (/(총리령|부령|교육부령)으로\s*정하는\s*바/.test(articleBlock)) {
-    out += `\n\n"부령/총리령으로 정하는 바"가 필요하시면 관련 시행규칙 조문을 추가로 조회해 드릴 수 있습니다. 필요하시면 말씀해 주세요!`;
-  }
+  out += `\n\n${buildFollowupQuestion(articleBlock, delegatedLinks)}`
 
   return out.trim();
 }
