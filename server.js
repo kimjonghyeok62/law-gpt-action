@@ -279,7 +279,7 @@ app.post("/law/text", async (req, res) => {
           .join("\n\n");
       }
 
-      finalText += `\n\n${buildLinkSummarySection(links, delegatedLinks, relatedSections)}`;
+      finalText += `\n\n${buildLinkSummarySection(links, delegatedLinks, relatedSections, meta.lawName, meta.joDisplay)}`;
       const quickLinks = buildQuickLinks(links, delegatedLinks, relatedSections);
 
       res.json({
@@ -301,7 +301,7 @@ app.post("/law/text", async (req, res) => {
       const meta = extractLawTextMeta(rawText, { lawNameHint: resolvedLawName, joHint: joParsed.joForLookup || jo });
       const links = buildArticleLinks(meta.lawName, meta.joDisplay);
       const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, true);
-      const linkSection = buildLinkSummarySection(links, delegatedLinks, []);
+      const linkSection = buildLinkSummarySection(links, delegatedLinks, [], meta.lawName, meta.joDisplay);
       const quickLinks = buildQuickLinks(links, delegatedLinks, []);
       res.json({
         success: !!rawText,
@@ -453,20 +453,23 @@ function buildFollowupQuestion(articleBlock, delegatedLinks = []) {
   return `추천 질문: "이 조문을 민원 회신 문장으로 5줄 이내로 작성해줘."`
 }
 
-function buildLinkSummarySection(baseLinks, delegatedLinks = [], relatedSections = []) {
-  const lines = ["", "---", "", "**원문 링크 (국가법령정보센터)**", ""]
+function buildLinkSummarySection(baseLinks, delegatedLinks = [], relatedSections = [], lawName = "", joDisplay = "") {
+  const lines = ["", "---", "", "원문 링크 (국가법령정보센터)", ""]
+  const baseName = [lawName, joDisplay].filter(Boolean).join(" ") || "원문 조문"
   if (baseLinks?.articleDirect) {
-    lines.push(`- [원문 조문 바로가기](${baseLinks.articleDirect})`)
+    lines.push(`- [${baseName}](${baseLinks.articleDirect})`)
   }
   for (const d of delegatedLinks) {
     const fetched = relatedSections.find(s => s.kind === d.kind);
     if (!fetched && d?.articleDirect) {
-      lines.push(`- [${d.kind} 바로가기](${d.articleDirect})`)
+      const label = [d.lawName, d.jo].filter(Boolean).join(" ") || d.kind
+      lines.push(`- [${label}](${d.articleDirect})`)
     }
   }
   for (const s of relatedSections) {
     if (s?.link) {
-      lines.push(`- [${s.kind} 원문 바로가기](${s.link})`)
+      const label = [s.lawName, s.jo].filter(Boolean).join(" ") || s.kind
+      lines.push(`- [${label}](${s.link})`)
     }
   }
   return lines.join("\n").trim()
