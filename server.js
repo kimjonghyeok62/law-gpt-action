@@ -221,7 +221,7 @@ app.post("/law/text", async (req, res) => {
     try {
       const meta = extractLawTextMeta(rawText, { lawNameHint: resolvedLawName, joHint: joParsed.joForLookup || jo });
       const links = buildArticleLinks(meta.lawName, meta.joDisplay);
-      const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay);
+      const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, true);
       const formattedText = formatLawTextSimple(rawText, {
         lawNameHint: resolvedLawName,
         joHint: joParsed.joForLookup || jo,
@@ -230,7 +230,7 @@ app.post("/law/text", async (req, res) => {
 
       let finalText = formattedText;
       let relatedSections = [];
-      const needRelated = includeRelated === true || includeRelated === "true" || includeRelated === 1;
+      const needRelated = includeRelated !== false && includeRelated !== "false" && includeRelated !== 0;
       if (needRelated && delegatedLinks.length > 0) {
         const targets = delegatedLinks.slice(0, 2); // 시행령/시행규칙
         relatedSections = await Promise.all(
@@ -270,6 +270,8 @@ app.post("/law/text", async (req, res) => {
           .join("\n\n");
       }
 
+      finalText += `\n\n${buildLinkSummarySection(links, delegatedLinks, relatedSections)}`;
+
       res.json({
         success: !result.isError,
         asOfDate: new Date().toISOString().slice(0, 10),
@@ -284,13 +286,17 @@ app.post("/law/text", async (req, res) => {
         }
       });
     } catch (_) {
+      const meta = extractLawTextMeta(rawText, { lawNameHint: resolvedLawName, joHint: joParsed.joForLookup || jo });
+      const links = buildArticleLinks(meta.lawName, meta.joDisplay);
+      const delegatedLinks = buildDelegatedLinks(rawText, meta.lawName, meta.joDisplay, true);
+      const linkSection = buildLinkSummarySection(links, delegatedLinks, []);
       res.json({
         success: !result.isError,
         asOfDate: new Date().toISOString().slice(0, 10),
         mustDisplayVerbatim: true,
         displayPolicy: "verbatim_markdown",
         responseFormat: "markdown",
-        text: rawText
+        text: `${rawText}\n\n${linkSection}`.trim()
       });
     }
   } catch (error) {
@@ -372,7 +378,7 @@ function extractJoFromText(text) {
   return m[2] ? `제${Number(m[1])}조의${Number(m[2])}` : `제${Number(m[1])}조`
 }
 
-function buildDelegatedLinks(articleBlock, lawName, currentJo) {
+function buildDelegatedLinks(articleBlock, lawName, currentJo, includeFallback = false) {
   const delegated = []
   const normalizedLawName = String(lawName || "").trim()
   if (!normalizedLawName) return delegated
@@ -381,8 +387,10 @@ function buildDelegatedLinks(articleBlock, lawName, currentJo) {
   const ruleSnippet = articleBlock.match(/시행규칙[^。\n]*제\s*\d+조(?:의\s*\d+)?/)?.[0] || ""
   const execJo = extractJoFromText(execSnippet) || currentJo
   const ruleJo = extractJoFromText(ruleSnippet) || currentJo
+  const isAlreadyDelegatedLaw = /(시행령|시행규칙)\s*$/.test(normalizedLawName)
+  const shouldUseFallback = includeFallback && !isAlreadyDelegatedLaw
 
-  if (/대통령령으로\s*정하는\s*바/.test(articleBlock) || /시행령/.test(articleBlock)) {
+  if (shouldUseFallback || /대통령령으로\s*정하는\s*바/.test(articleBlock) || /시행령/.test(articleBlock)) {
     const execLawName = `${normalizedLawName} 시행령`
     delegated.push({
       kind: "시행령",
@@ -392,7 +400,7 @@ function buildDelegatedLinks(articleBlock, lawName, currentJo) {
     })
   }
 
-  if (/(총리령|부령|교육부령)으로\s*정하는\s*바/.test(articleBlock) || /시행규칙/.test(articleBlock)) {
+  if (shouldUseFallback || /(총리령|부령|교육부령)으로\s*정하는\s*바/.test(articleBlock) || /시행규칙/.test(articleBlock)) {
     const ruleLawName = `${normalizedLawName} 시행규칙`
     delegated.push({
       kind: "시행규칙",
@@ -428,6 +436,27 @@ function buildFollowupQuestion(articleBlock, delegatedLinks = []) {
     return `추천 질문: "이 조문 기준으로 신청요건·구비서류·처리기한을 체크리스트로 만들어줘."`
   }
   return `추천 질문: "이 조문을 민원 회신 문장으로 5줄 이내로 작성해줘."`
+}
+
+function buildLinkSummarySection(baseLinks, delegatedLinks = [], relatedSections = []) {
+  const lines = ["", "---", "", "**링크**", ""]
+  if (baseLinks?.articleDirect) {
+    lines.push(`- **원문 조문**: ${baseLinks.articleDirect}`)
+  }
+
+  for (const d of delegatedLinks) {
+    if (d?.articleDirect) {
+      lines.push(`- **${d.kind}**: ${d.articleDirect}`)
+    }
+  }
+
+  for (const s of relatedSections) {
+    if (s?.link) {
+      lines.push(`- **관련 ${s.kind}**: ${s.link}`)
+    }
+  }
+
+  return lines.join("\n").trim()
 }
 
 function parseJoAndClause(joInput) {
@@ -519,8 +548,7 @@ function formatLawTextSimple(rawText, options = {}) {
   const joDisplay = (headerMatch[0].match(/제\s*\d+조(?:의\s*\d+)?/)?.[0] || meta.joDisplay || "해당 조문")
     .replace(/\s+/g, "");
 
-  const links = buildArticleLinks(lawName, joDisplay);
-  const delegatedLinks = buildDelegatedLinks(articleBlock, lawName, joDisplay);
+  const delegatedLinks = buildDelegatedLinks(articleBlock, lawName, joDisplay, true);
   const readableArticle = emphasizeKeyPhrases(
     articleBlock
       .replace(/\n(\d+\.\s+)/g, "\n\n$1")
@@ -531,12 +559,6 @@ function formatLawTextSimple(rawText, options = {}) {
   let out = `${lawName} ${joDisplay} 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
   if (options?.clauseNo) {
     out = `${lawName} ${joDisplay} ${options.clauseNo}항 조문입니다.\n\n---\n\n${readableArticle}\n\n---\n\n${summary}`;
-  }
-
-  out += `\n\n원문 링크: ${links.articleDirect}`;
-
-  if (delegatedLinks.length > 0) {
-    out += `\n` + delegatedLinks.map((d) => `${d.kind} 링크: ${d.articleDirect}`).join("\n");
   }
 
   out += `\n\n${buildFollowupQuestion(articleBlock, delegatedLinks)}`
