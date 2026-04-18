@@ -12,7 +12,7 @@ info:
 
 servers:
   - url: https://law-gpt-action-production.up.railway.app
-    description: Production
+    description: "Production"
 
 paths:
   /:
@@ -21,7 +21,7 @@ paths:
       summary: API 루트 정보
       responses:
         '200':
-          description: OK
+          description: "OK"
 
   /health:
     get:
@@ -29,7 +29,7 @@ paths:
       summary: 헬스 체크
       responses:
         '200':
-          description: OK
+          description: "OK"
 
   /law/search:
     post:
@@ -44,11 +44,11 @@ paths:
               properties:
                 query:
                   type: string
-                  description: 검색할 법령명 (예: 학원법)
+                  description: "검색할 법령명 (예: 학원법)"
               required: [query]
       responses:
         '200':
-          description: 검색 성공
+          description: "검색 성공"
           content:
             application/json:
               schema:
@@ -73,7 +73,7 @@ paths:
     post:
       operationId: getLawText
       summary: 법령 조문 조회
-      description: mst/lawId/lawName 중 하나로 법령을 찾고, jo 지정 시 해당 조문을 조회합니다.
+      description: "mst/lawId/lawName 중 하나로 법령을 찾고, jo 지정 시 해당 조문을 조회합니다."
       requestBody:
         required: true
         content:
@@ -83,25 +83,25 @@ paths:
               properties:
                 mst:
                   type: string
-                  description: 법령일련번호
+                  description: "법령일련번호"
                 lawId:
                   type: string
-                  description: 법령ID
+                  description: "법령ID"
                 lawName:
                   type: string
-                  description: 법령명
+                  description: "법령명"
                 jo:
                   type: string
-                  description: 조문 번호 (예: 제3조, 3, 제3조의2)
+                  description: "조문 번호 (예: 제3조, 3, 제3조의2)"
                 includeRelated:
                   type: boolean
-                  description: true면 관련 시행령/시행규칙을 한 번에 함께 조회
+                  description: "true면 관련 시행령/시행규칙을 한 번에 함께 조회"
                 efYd:
                   type: string
-                  description: 시행일자 (YYYYMMDD)
+                  description: "시행일자 (YYYYMMDD)"
       responses:
         '200':
-          description: 조회 성공
+          description: "조회 성공"
           content:
             application/json:
               schema:
@@ -123,10 +123,10 @@ paths:
                 knd:
                   type: string
                   enum: ['1', '2']
-                  description: 1 또는 2
+                  description: "1 또는 2"
       responses:
         '200':
-          description: 조회 성공
+          description: "조회 성공"
 
   /law/ordinance/search:
     post:
@@ -147,7 +147,7 @@ paths:
               required: [query]
       responses:
         '200':
-          description: 검색 성공
+          description: "검색 성공"
           content:
             application/json:
               schema:
@@ -171,7 +171,7 @@ paths:
               required: [ordinSeq]
       responses:
         '200':
-          description: 조회 성공
+          description: "조회 성공"
           content:
             application/json:
               schema:
@@ -201,7 +201,7 @@ paths:
               required: [query]
       responses:
         '200':
-          description: 검색 성공
+          description: "검색 성공"
           content:
             application/json:
               schema:
@@ -220,11 +220,11 @@ paths:
               properties:
                 id:
                   type: string
-                  description: 판례일련번호
+                  description: "판례일련번호"
               required: [id]
       responses:
         '200':
-          description: 조회 성공
+          description: "조회 성공"
           content:
             application/json:
               schema:
@@ -249,7 +249,7 @@ paths:
               required: [lawName]
       responses:
         '200':
-          description: 조회 성공
+          description: "조회 성공"
           content:
             application/json:
               schema:
@@ -273,7 +273,7 @@ paths:
               required: [mst]
       responses:
         '200':
-          description: 조회 성공
+          description: "조회 성공"
           content:
             application/json:
               schema:
@@ -302,7 +302,7 @@ paths:
               required: [lawName]
       responses:
         '200':
-          description: 조회 성공
+          description: "조회 성공"
           content:
             application/json:
               schema:
@@ -326,31 +326,31 @@ paths:
               properties:
                 lawName:
                   type: string
-                  description: 법령명 (lawId 대신 사용 가능)
+                  description: "법령명 (lawId 대신 사용 가능)"
                 lawId:
                   type: string
-                  description: 법령ID (lawName 대신 사용 가능)
+                  description: "법령ID (lawName 대신 사용 가능)"
                 jo:
                   type: string
-                  description: 특정 조문 필터 (예: 제38조)
+                  description: "특정 조문 필터 (예: 제38조)"
                 fromRegDt:
                   type: string
-                  description: 조회 시작일 (YYYYMMDD)
+                  description: "조회 시작일 (YYYYMMDD)"
                 toRegDt:
                   type: string
-                  description: 조회 종료일 (YYYYMMDD)
+                  description: "조회 종료일 (YYYYMMDD)"
                 recentYears:
                   type: integer
-                  description: 최근 N년 자동 조회 (예: 3)
+                  description: "최근 N년 자동 조회 (예: 3)"
                 periodText:
                   type: string
-                  description: 자연어 기간 (예: 최근 3년, 최근 몇년)
+                  description: "자연어 기간 (예: 최근 3년, 최근 몇년)"
                 limit:
                   type: integer
-                  description: 최신순으로 보여줄 최대 건수 (기본 10, 최대 50)
+                  description: "최신순으로 보여줄 최대 건수 (기본 10, 최대 50)"
       responses:
         '200':
-          description: 조회 성공
+          description: "조회 성공"
           content:
             application/json:
               schema:
@@ -391,7 +391,7 @@ paths:
               required: [question]
       responses:
         '200':
-          description: 처리 결과
+          description: "처리 결과"
           content:
             application/json:
               schema:
@@ -426,7 +426,7 @@ components:
           type: boolean
         asOfDate:
           type: string
-          description: 응답 기준일 (YYYY-MM-DD)
+          description: "응답 기준일 (YYYY-MM-DD)"
         text:
           type: string
         links:
